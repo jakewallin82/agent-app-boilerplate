@@ -53,6 +53,14 @@ Add an IDE-style three-column layout with file explorer, chat interface, and fil
 - Real-time collaborative editing
 - File upload from user
 - File deletion from UI
+- Persisting files written outside the session directory (ignored)
+
+## Key Design Decisions
+
+1. **Session naming**: Modal prompts user to name session before first message
+2. **File path scope**: Only files in `/data/{sessionId}/` are persisted; files outside are ignored
+3. **Right panel visibility**: Hidden until a file is created OR an old session with files is selected
+4. **File detection**: SSE stream interception (not Claude Code hooks) for real-time updates
 
 ---
 
@@ -1485,30 +1493,372 @@ if ((message as any).type === 'file_event') {
 
 ### Overview
 
-Wire everything together so sessions persist correctly and can be resumed.
+Wire everything together with a session naming modal, proper session lifecycle, and resume functionality.
 
 ### Changes Required
 
-#### 1. Update ChatInterface to use Session Context
+#### 1. New Session Modal Component
 
-Integrate with SessionContext so:
-- New chats create new sessions
-- Loading a session resumes the SDK session
-- Session name can be edited
+**File**: `apps/web/src/components/NewSessionModal.tsx`
 
-#### 2. Session name auto-generation
-
-When a new session is created, generate a name from the first user message:
 ```typescript
-const generateSessionName = (firstMessage: string): string => {
-  // Take first 50 chars, truncate at word boundary
-  const truncated = firstMessage.slice(0, 50);
-  const lastSpace = truncated.lastIndexOf(' ');
-  return lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated;
-};
+import { useState } from 'react';
+
+interface NewSessionModalProps {
+  isOpen: boolean;
+  onConfirm: (name: string) => void;
+  onCancel: () => void;
+}
+
+export function NewSessionModal({ isOpen, onConfirm, onCancel }: NewSessionModalProps) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError('Please enter a session name');
+      return;
+    }
+    if (trimmed.length < 3) {
+      setError('Name must be at least 3 characters');
+      return;
+    }
+    onConfirm(trimmed);
+    setName('');
+    setError('');
+  };
+
+  const handleCancel = () => {
+    setName('');
+    setError('');
+    onCancel();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-md mx-4">
+        <h2 className="text-lg font-semibold mb-4">New Session</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Give your session a descriptive name to help you find it later.
+        </p>
+
+        <form onSubmit={handleSubmit}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setError('');
+            }}
+            placeholder="e.g., NFL Score Analysis, Research Project..."
+            className="w-full bg-input border border-border rounded px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-primary"
+            autoFocus
+            maxLength={100}
+          />
+
+          {error && (
+            <p className="text-red-400 text-sm mb-3">{error}</p>
+          )}
+
+          <div className="flex gap-3 mt-4">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="flex-1 px-4 py-2 border border-border rounded hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+            >
+              Create Session
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 ```
 
-#### 3. Session update endpoint
+#### 2. Create Session API Endpoint
+
+**File**: `apps/server/src/routes/sessions.ts`
+
+Add endpoint to create session with name:
+
+```typescript
+// Create new session with name
+sessionsRouter.post('/', async (c) => {
+  const user = c.get('user');
+  const { name } = await c.req.json();
+
+  if (!name || name.trim().length < 3) {
+    return c.json({ error: 'Session name is required (min 3 chars)' }, 400);
+  }
+
+  const sessionId = crypto.randomUUID();
+
+  const { data, error } = await supabase
+    .from('sessions')
+    .insert({
+      id: sessionId,
+      user_id: user.id,
+      name: name.trim(),
+      data_folder: `data/${sessionId}`,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  return c.json({ session: data });
+});
+```
+
+#### 3. API Client for Session Creation
+
+**File**: `apps/web/src/lib/api.ts`
+
+Add:
+
+```typescript
+export async function createSession(name: string): Promise<SessionWithFiles> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to create session');
+  }
+  const { session } = await res.json();
+  return session;
+}
+```
+
+#### 4. Update Session Context
+
+**File**: `apps/web/src/contexts/SessionContext.tsx`
+
+Add session creation and modal state:
+
+```typescript
+import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import type { SessionWithFiles } from '@/types';
+import { getSessions, restoreSession, createSession as createSessionApi } from '@/lib/api';
+
+interface SessionContextType {
+  sessions: SessionWithFiles[];
+  currentSession: SessionWithFiles | null;
+  isLoadingSessions: boolean;
+  isCreatingSession: boolean;
+  showNewSessionModal: boolean;
+  pendingMessage: string | null;  // Message waiting for session creation
+  loadSessions: () => Promise<void>;
+  selectSession: (session: SessionWithFiles) => Promise<void>;
+  startNewSession: (message: string) => void;  // Shows modal, stores pending message
+  confirmNewSession: (name: string) => Promise<void>;  // Creates session, sends message
+  cancelNewSession: () => void;
+  setCurrentSession: (session: SessionWithFiles | null) => void;
+}
+
+const SessionContext = createContext<SessionContextType | undefined>(undefined);
+
+export function SessionProvider({ children }: { children: ReactNode }) {
+  const [sessions, setSessions] = useState<SessionWithFiles[]>([]);
+  const [currentSession, setCurrentSession] = useState<SessionWithFiles | null>(null);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+
+  const loadSessions = useCallback(async () => {
+    setIsLoadingSessions(true);
+    try {
+      const data = await getSessions();
+      setSessions(data);
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  const selectSession = useCallback(async (session: SessionWithFiles) => {
+    await restoreSession(session.id);
+    setCurrentSession(session);
+  }, []);
+
+  // Called when user tries to send first message without a session
+  const startNewSession = useCallback((message: string) => {
+    setPendingMessage(message);
+    setShowNewSessionModal(true);
+  }, []);
+
+  // Called when user confirms session name in modal
+  const confirmNewSession = useCallback(async (name: string) => {
+    setIsCreatingSession(true);
+    try {
+      const session = await createSessionApi(name);
+      setCurrentSession(session);
+      setSessions(prev => [session, ...prev]);
+      setShowNewSessionModal(false);
+      // pendingMessage will be used by ChatInterface to send the message
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      throw error;
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }, []);
+
+  const cancelNewSession = useCallback(() => {
+    setShowNewSessionModal(false);
+    setPendingMessage(null);
+  }, []);
+
+  return (
+    <SessionContext.Provider
+      value={{
+        sessions,
+        currentSession,
+        isLoadingSessions,
+        isCreatingSession,
+        showNewSessionModal,
+        pendingMessage,
+        loadSessions,
+        selectSession,
+        startNewSession,
+        confirmNewSession,
+        cancelNewSession,
+        setCurrentSession,
+      }}
+    >
+      {children}
+    </SessionContext.Provider>
+  );
+}
+
+export function useSessions() {
+  const context = useContext(SessionContext);
+  if (!context) {
+    throw new Error('useSessions must be used within a SessionProvider');
+  }
+  return context;
+}
+```
+
+#### 5. Update ChatInterface for Session Flow
+
+**File**: `apps/web/src/components/ChatInterface.tsx`
+
+Key changes:
+
+```typescript
+import { useSessions } from '@/contexts/SessionContext';
+import { useFiles } from '@/contexts/FileContext';
+import { NewSessionModal } from './NewSessionModal';
+
+export function ChatInterface() {
+  const { user, signOut } = useAuth();
+  const {
+    currentSession,
+    showNewSessionModal,
+    pendingMessage,
+    startNewSession,
+    confirmNewSession,
+    cancelNewSession,
+    loadSessions,
+  } = useSessions();
+  const { addOrUpdateFile, files, loadSessionFiles } = useFiles();
+
+  // ... existing state ...
+
+  // Load session files and messages when currentSession changes
+  useEffect(() => {
+    if (currentSession) {
+      loadSessionFiles(currentSession.id);
+      loadSessionMessages(currentSession.id);
+    }
+  }, [currentSession]);
+
+  // After session is created and we have a pending message, send it
+  useEffect(() => {
+    if (currentSession && pendingMessage) {
+      handleSendMessage(pendingMessage);
+      // Clear pending message in context
+    }
+  }, [currentSession, pendingMessage]);
+
+  const handleSend = async (content: string) => {
+    // If no current session, show modal to create one
+    if (!currentSession) {
+      startNewSession(content);
+      return;
+    }
+
+    // Otherwise send normally
+    await handleSendMessage(content);
+  };
+
+  const handleSendMessage = async (content: string) => {
+    // ... existing streaming logic, but use currentSession.id ...
+    // ... and handle file_event messages ...
+  };
+
+  return (
+    <>
+      <NewSessionModal
+        isOpen={showNewSessionModal}
+        onConfirm={async (name) => {
+          await confirmNewSession(name);
+        }}
+        onCancel={cancelNewSession}
+      />
+
+      <div className="flex flex-col h-screen">
+        {/* ... rest of chat UI ... */}
+      </div>
+    </>
+  );
+}
+```
+
+#### 6. Update Layout for Right Panel Visibility
+
+**File**: `apps/web/src/components/Layout.tsx`
+
+Show right panel when old session with files is selected:
+
+```typescript
+export function Layout({ children }: LayoutProps) {
+  const { openFile, openTabs } = useFiles();
+  const { currentSession } = useSessions();
+  const { files } = useFiles();
+
+  const [leftPanelWidth, setLeftPanelWidth] = useState(220);
+  const [rightPanelWidth, setRightPanelWidth] = useState(400);
+
+  // Show right panel if:
+  // 1. There are open tabs, OR
+  // 2. An old session with files is selected (so user can click to open them)
+  const showRightPanel = openTabs.length > 0 || (currentSession && files.length > 0);
+
+  // ... rest of component ...
+}
+```
+
+#### 7. Session Update Endpoint
 
 **File**: `apps/server/src/routes/sessions.ts`
 
@@ -1534,19 +1884,86 @@ sessionsRouter.put('/:id', async (c) => {
 });
 ```
 
+#### 8. Update Agent Route for Pre-Created Sessions
+
+Since sessions are now created before the first message (via modal), update `agent.ts` to:
+- Always require a sessionId (session created via modal before first message)
+- Set agent cwd to the session directory
+- Ensure SDK session ID is saved after first query
+
+**File**: `apps/server/src/routes/agent.ts`
+
+Key changes to the query endpoint:
+
+```typescript
+const querySchema = z.object({
+  content: z.string().min(1),
+  sessionId: z.string().uuid(),  // Now required (session created before first message)
+});
+
+// In the handler:
+const { content, sessionId } = parseResult.data;
+
+// Session must exist (created via modal)
+const { data: session, error: sessionError } = await supabase
+  .from('sessions')
+  .select('*')
+  .eq('id', sessionId)
+  .eq('user_id', user.id)
+  .single();
+
+if (sessionError || !session) {
+  return c.json({ error: 'Session not found' }, 404);
+}
+
+// Restore files if resuming
+if (session.sdk_session_id) {
+  await restoreSessionFiles(sessionId);
+}
+
+// Ensure session directory exists
+const sessionDir = await ensureSessionDir(sessionId);
+
+// Agent query with session directory as cwd
+const queryIterator = query({
+  prompt: content,
+  options: {
+    cwd: sessionDir,  // Agent works in session-scoped directory
+    maxTurns: 100,
+    resume: session.sdk_session_id || undefined,
+    // ...
+  },
+});
+
+// After query, save SDK session ID if this is first message
+if (message.type === 'system' && message.subtype === 'init') {
+  const newSdkSessionId = message.session_id;
+  if (!session.sdk_session_id) {
+    await supabase
+      .from('sessions')
+      .update({ sdk_session_id: newSdkSessionId })
+      .eq('id', sessionId);
+  }
+}
+```
+
 ### Success Criteria
 
 #### Automated Verification:
 - [ ] `pnpm typecheck` passes
 - [ ] All API endpoints respond correctly
+- [ ] `POST /api/sessions` creates session with name
 
 #### Manual Verification:
-- [ ] Create new session → appears in session list
-- [ ] Session gets named from first message
+- [ ] Click "New Session" or send first message → modal appears
+- [ ] Enter session name → session created, appears in list
+- [ ] Cancel modal → no session created, message not sent
+- [ ] Send message after naming → conversation starts
 - [ ] Click old session → loads files and chat history
-- [ ] Resume old session → agent remembers context
+- [ ] Resume old session → agent remembers context (SDK session resumed)
 - [ ] Agent writes file in resumed session → file persists
-- [ ] Session list updates when new session created
+- [ ] Right panel appears when session with files is selected
+- [ ] Session list updates in real-time when new session created
 
 ---
 
@@ -1644,3 +2061,63 @@ ENV DATA_DIR=/app/data
 - Claude Code Hooks: https://docs.anthropic.com/en/docs/claude-code/hooks
 - Supabase Storage: https://supabase.com/docs/guides/storage
 - Claude Agent SDK: https://github.com/anthropics/claude-agent-sdk-typescript
+
+---
+
+## Handoff Summary
+
+### What This Plan Implements
+
+This plan adds file viewing and persistence to the agent-app-boilerplate:
+
+1. **Three-column IDE layout**: File Explorer (left) | Chat (center) | File Viewer (right)
+2. **Session naming modal**: Users name sessions before first message
+3. **Auto file persistence**: Files written by agent are immediately uploaded to Supabase Storage
+4. **Session restore**: Loading old session downloads files to container and resumes SDK session
+5. **File viewer with tabs**: Click files to open in closable tabs, markdown rendered
+
+### Implementation Order
+
+Execute phases sequentially, verifying each before proceeding:
+
+| Phase | Focus | Key Files |
+|-------|-------|-----------|
+| 1 | Backend file detection & persistence | `services/files.ts`, `routes/agent.ts`, `routes/files.ts` |
+| 2 | Frontend three-column layout | `Layout.tsx`, `FileExplorer.tsx`, `FileViewerTabs.tsx`, contexts |
+| 3 | Session workflow integration | `NewSessionModal.tsx`, `SessionContext.tsx`, `ChatInterface.tsx` |
+
+### Database Migration Required
+
+Before starting, run the SQL in the "Database Changes" section to add:
+- `name` and `data_folder` columns to `sessions` table
+- `agent_files` table with unique constraint on `(session_id, file_path)`
+
+### Key Architecture Decisions
+
+1. **SSE stream interception** (not hooks) for file detection - gives real-time frontend updates
+2. **Files outside session directory are ignored** - only `/data/{sessionId}/` is persisted
+3. **Sessions created via modal before first message** - ensures session has a name
+4. **Right panel hidden until files exist** - appears when file created or old session selected
+
+### Starting Point
+
+The codebase has Phase 1 (basic chat + auth) complete. Start with Phase 1 of this plan (backend file persistence), then proceed through each phase.
+
+### Verification Commands
+
+```bash
+# Check types
+pnpm typecheck
+
+# Start dev servers
+pnpm dev
+
+# Health check
+curl http://localhost:8080/health
+
+# Test session creation
+curl -X POST http://localhost:8080/api/sessions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Test Session"}'
+```

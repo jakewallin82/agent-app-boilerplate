@@ -55,3 +55,37 @@ export type TimelineItem =
 
 // Session storage key
 export const SESSION_STORAGE_KEY = 'agent-session-id';
+
+// Agent file from backend
+export interface AgentFile {
+  id: string;
+  sessionId: string;
+  userId: string;
+  filePath: string;
+  storagePath: string;
+  fileType: string;
+  fileSize: number;
+  contentHash: string;
+  signedUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// File event from SSE stream
+export interface FileEvent {
+  type: 'file_event';
+  subtype: 'created' | 'updated' | 'deleted';
+  file: AgentFile;
+}
+
+// Session with file count
+export interface SessionWithFiles {
+  id: string;
+  user_id: string;
+  title: string;
+  session_name: string;
+  sdk_session_id?: string;
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+}

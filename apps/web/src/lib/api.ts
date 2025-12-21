@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
+import type { AgentFile, SessionWithFiles } from '@/types';
 
-async function getAuthHeaders(): Promise<HeadersInit> {
+export async function getAuthHeaders(): Promise<HeadersInit> {
   const { data: { session } } = await supabase.auth.getSession();
   return {
     'Content-Type': 'application/json',
@@ -8,57 +9,51 @@ async function getAuthHeaders(): Promise<HeadersInit> {
   };
 }
 
-// Create or get session - uses SDK session ID as the primary key
-export async function ensureSession(sessionId: string): Promise<{ id: string }> {
+// Session API
+export async function getSessions(): Promise<SessionWithFiles[]> {
   const headers = await getAuthHeaders();
-  const res = await fetch('/api/sessions', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ id: sessionId }),
-  });
+  const res = await fetch('/api/sessions', { headers });
+  if (!res.ok) throw new Error('Failed to fetch sessions');
+  const { sessions } = await res.json();
+  return sessions;
+}
 
-  if (!res.ok) throw new Error('Failed to create session');
+export async function getSession(sessionId: string): Promise<SessionWithFiles> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/sessions/${sessionId}`, { headers });
+  if (!res.ok) throw new Error('Failed to fetch session');
   const { session } = await res.json();
   return session;
 }
 
-// Get session by ID (session ID = SDK session ID)
-export async function getSession(sessionId: string): Promise<{ id: string } | null> {
+// Files API
+export async function getSessionFiles(sessionId: string): Promise<AgentFile[]> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-    headers,
-  });
-
-  if (!res.ok) return null;
-  const { session } = await res.json();
-  return session;
+  const res = await fetch(`/api/files/sessions/${sessionId}/files`, { headers });
+  if (!res.ok) throw new Error('Failed to fetch files');
+  const { files } = await res.json();
+  return files;
 }
 
-// Get messages for a session
-export async function getSessionMessages(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string }>> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`/api/sessions/${sessionId}/messages`, {
-    headers,
-  });
-
-  if (!res.ok) return [];
-  const { messages } = await res.json();
-  return messages;
+export async function getFileContent(signedUrl: string): Promise<string> {
+  const res = await fetch(signedUrl);
+  if (!res.ok) throw new Error('Failed to fetch file content');
+  return res.text();
 }
 
-// Save a message to a session
-export async function saveMessage(sessionId: string, role: 'user' | 'assistant', content: string): Promise<void> {
+export async function restoreSession(sessionId: string): Promise<void> {
   const headers = await getAuthHeaders();
-  await fetch(`/api/sessions/${sessionId}/messages`, {
+  const res = await fetch(`/api/files/sessions/${sessionId}/restore`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ role, content }),
   });
+  if (!res.ok) throw new Error('Failed to restore session');
 }
 
-// Stream agent query - sessionId is optional (SDK handles resume via sdkSessionId)
+// Stream agent query with session name and optional SDK session ID for resuming
 export async function* streamAgentQuery(
   content: string,
+  sessionName: string,
   sdkSessionId?: string
 ): AsyncGenerator<any> {
   const headers = await getAuthHeaders();
@@ -69,11 +64,12 @@ export async function* streamAgentQuery(
       ...headers,
       'Accept': 'text/event-stream',
     },
-    body: JSON.stringify({ content, sdkSessionId }),
+    body: JSON.stringify({ content, sessionName, sdkSessionId }),
   });
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `HTTP ${res.status}`);
   }
 
   const reader = res.body?.getReader();

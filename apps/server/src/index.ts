@@ -8,6 +8,7 @@ import { logger } from 'hono/logger';
 import { agentRouter } from './routes/agent.js';
 import { authRouter } from './routes/auth.js';
 import { sessionsRouter } from './routes/sessions.js';
+import { filesRouter } from './routes/files.js';
 import { config } from './config.js';
 
 const app = new Hono();
@@ -26,6 +27,7 @@ app.get('/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOStri
 app.route('/api/agent', agentRouter);
 app.route('/api/auth', authRouter);
 app.route('/api/sessions', sessionsRouter);
+app.route('/api/files', filesRouter);
 
 console.log(`Server running on http://localhost:${config.server.port}`);
 

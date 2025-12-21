@@ -6,6 +6,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase } from '../lib/supabase.js';
 import { authMiddleware } from '../middleware/auth.js';
+import {
+  ensureSessionDir,
+  flushSessionFolder,
+} from '../services/files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,12 +19,13 @@ agentRouter.use('*', authMiddleware);
 
 const querySchema = z.object({
   content: z.string().min(1),
-  sessionId: z.string().uuid().optional(), // Optional - can run without DB session
-  sdkSessionId: z.string().optional(),
+  sessionName: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Session name must be alphanumeric with underscores/hyphens only'),
+  sdkSessionId: z.string().uuid().optional(), // For resuming existing sessions
 });
 
-// Agent workspace directory (relative to server)
-const AGENT_DIR = path.resolve(__dirname, '../../../../agent');
+// Base directories - use env vars in production (container) or resolve from source in development
+const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../../../data');
+const AGENT_DIR = process.env.AGENT_DIR || path.resolve(__dirname, '../../../../agent');
 
 // Helper to extract text content from assistant message
 function extractTextContent(message: SDKMessage): string {
@@ -44,48 +49,41 @@ agentRouter.post('/query', async (c) => {
     return c.json({ error: 'Invalid request', details: parseResult.error }, 400);
   }
 
-  const { content, sessionId, sdkSessionId: requestSdkSessionId } = parseResult.data;
+  const { content, sessionName, sdkSessionId: existingSessionId } = parseResult.data;
 
-  // If sessionId provided, verify ownership
-  let session: any = null;
-  if (sessionId) {
-    const { data, error: sessionError } = await supabase
-      .from('sessions')
-      .select('*')
-      .eq('id', sessionId)
-      .eq('user_id', user.id)
-      .single();
+  // Session folder path (human-readable name)
+  const sessionDir = path.join(DATA_DIR, sessionName);
+  await ensureSessionDir(sessionName);
 
-    if (sessionError || !data) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-    session = data;
+  console.log('[AGENT] Session name:', sessionName);
+  console.log('[AGENT] Session directory:', sessionDir);
+  console.log('[AGENT] Resuming session:', existingSessionId || 'none (new session)');
 
-    // Save user message to existing session
-    await supabase.from('messages').insert({
-      session_id: sessionId,
-      role: 'user',
-      content,
-    });
-  }
+  // Build prompt with session context
+  const promptWithContext = `[Session Name: ${sessionName}]
+[Output Directory: ${sessionDir}]
+
+IMPORTANT: Save all output files to the current working directory using relative paths (e.g., ./report.md).
+
+---
+
+${content}`;
 
   return streamSSE(c, async (stream) => {
     let assistantContent = '';
-    // Prefer SDK session ID from request (localStorage), fall back to database
-    let sdkSessionId = requestSdkSessionId || session?.sdk_session_id;
+    let sdkSessionId: string | undefined = existingSessionId;
 
     try {
       const queryIterator = query({
-        prompt: content,
+        prompt: promptWithContext,
         options: {
-          cwd: AGENT_DIR,
+          cwd: sessionDir,
           maxTurns: 100,
-          resume: sdkSessionId || undefined,
           allowedTools: [
             'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
             'WebSearch', 'WebFetch', 'Task', 'Skill', 'TodoWrite',
           ],
-          settingSources: ['local', 'project'],
+          ...(existingSessionId && { resume: existingSessionId }),
         },
       });
 
@@ -93,6 +91,7 @@ agentRouter.post('/query', async (c) => {
         // Capture SDK session ID from init message
         if (message.type === 'system' && (message as any).subtype === 'init') {
           sdkSessionId = message.session_id;
+          console.log('[AGENT] SDK Session ID:', sdkSessionId);
         }
 
         // Accumulate assistant text content
@@ -108,24 +107,55 @@ agentRouter.post('/query', async (c) => {
         });
       }
 
-      // Only save to DB if we have a session
-      if (sessionId && session) {
-        // Save assistant message
-        if (assistantContent) {
-          await supabase.from('messages').insert({
-            session_id: sessionId,
-            role: 'assistant',
-            content: assistantContent,
+      // Save session to DB FIRST (before file flush, due to foreign key constraint)
+      if (sdkSessionId) {
+        console.log('[AGENT] Creating session record:', sdkSessionId);
+        const { error: sessionError } = await supabase
+          .from('sessions')
+          .upsert({
+            id: sdkSessionId,
+            user_id: user.id,
+            sdk_session_id: sdkSessionId,
+            session_name: sessionName,
+            title: sessionName,
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'id',
           });
-        }
 
-        // Update session with SDK session ID for resume
-        if (sdkSessionId && sdkSessionId !== session.sdk_session_id) {
-          await supabase
-            .from('sessions')
-            .update({ sdk_session_id: sdkSessionId, updated_at: new Date().toISOString() })
-            .eq('id', sessionId);
+        if (sessionError) {
+          console.error('[AGENT] Session upsert error:', sessionError);
         }
+      }
+
+      // Flush session folder - persist all files to Supabase
+      if (!sdkSessionId) {
+        console.log('[AGENT] No SDK session ID, skipping file flush');
+      }
+      console.log('[AGENT] Flushing session folder:', sessionName, 'with session ID:', sdkSessionId);
+      const persistedFiles = sdkSessionId
+        ? await flushSessionFolder(user.id, sdkSessionId, sessionName)
+        : [];
+
+      // Emit file events for each persisted file
+      for (const fileInfo of persistedFiles) {
+        await stream.writeSSE({
+          data: JSON.stringify({
+            type: 'file_event',
+            subtype: 'created',
+            file: fileInfo,
+          }),
+        });
+      }
+
+      console.log('[AGENT] Flushed', persistedFiles.length, 'files');
+
+      // Save messages
+      if (sdkSessionId) {
+        await supabase.from('messages').insert([
+          { session_id: sdkSessionId, role: 'user', content },
+          { session_id: sdkSessionId, role: 'assistant', content: assistantContent },
+        ]);
       }
 
       await stream.writeSSE({ data: '[DONE]' });

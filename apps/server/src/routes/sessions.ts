@@ -7,13 +7,16 @@ export const sessionsRouter = new Hono();
 
 sessionsRouter.use('*', authMiddleware);
 
-// List user's sessions
+// List user's sessions with file count
 sessionsRouter.get('/', async (c) => {
   const user = c.get('user');
 
   const { data, error } = await supabase
     .from('sessions')
-    .select('*')
+    .select(`
+      *,
+      file_count:agent_files(count)
+    `)
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
@@ -21,7 +24,13 @@ sessionsRouter.get('/', async (c) => {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json({ sessions: data as ChatSession[] });
+  // Transform file_count from array to number
+  const sessions = (data || []).map(s => ({
+    ...s,
+    file_count: s.file_count?.[0]?.count || 0,
+  }));
+
+  return c.json({ sessions });
 });
 
 // Create or get session - SDK session ID is used as the primary key

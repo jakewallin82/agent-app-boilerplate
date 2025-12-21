@@ -40,7 +40,7 @@ export function MessageInput({ onSend, disabled }: MessageInputProps) {
           disabled={disabled || !content.trim()}
           className="bg-primary text-primary-foreground px-6 py-3 rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50"
         >
-          {disabled ? 'Sending...' : 'Send'}
+          Send
         </button>
       </div>
     </form>

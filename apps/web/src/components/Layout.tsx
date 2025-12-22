@@ -7,10 +7,9 @@ import type { AgentFile } from '@/types';
 
 interface LayoutProps {
   children: ReactNode;
-  onNewSession: () => void;
 }
 
-export function Layout({ children, onNewSession }: LayoutProps) {
+export function Layout({ children }: LayoutProps) {
   const { openFile, openTabs } = useFiles();
   const { currentSession } = useSessions();
   const { files } = useFiles();
@@ -72,7 +71,7 @@ export function Layout({ children, onNewSession }: LayoutProps) {
         className="flex-shrink-0 h-full border-r border-border"
         style={{ width: leftPanelWidth }}
       >
-        <FileExplorer onFileClick={handleFileClick} onNewSession={onNewSession} />
+        <FileExplorer onFileClick={handleFileClick} />
       </div>
 
       {/* Left Resizer */}

@@ -15,12 +15,6 @@ import type {
   FileEvent,
 } from '@/types';
 
-interface ChatInterfaceProps {
-  showNewSessionModal: boolean;
-  onModalClose: () => void;
-  onNewSession: () => void;
-}
-
 // Extract text content from SDK message
 function extractTextContent(message: any): string {
   if (message.type !== 'assistant') return '';
@@ -58,12 +52,12 @@ function extractToolCalls(message: any): ToolUseBlock[] {
   );
 }
 
-export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession }: ChatInterfaceProps) {
+export function ChatInterface() {
   const { user, signOut } = useAuth();
   const { currentSession, setCurrentSession, updateCurrentSession, loadSessions } = useSessions();
   const { addOrUpdateFile, clearFiles } = useFiles();
 
-  // Session input state
+  // Session creation form state (shown when no session)
   const [sessionNameInput, setSessionNameInput] = useState('');
   const [initialMessageInput, setInitialMessageInput] = useState('');
 
@@ -77,42 +71,65 @@ export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession 
   const isSendingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Track last session ID to detect changes
+  const lastSessionIdRef = useRef<string | null>(null);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [timeline, messagesMap, subagentsMap]);
 
-  // Clear state when session changes
+  // Clear state when switching between different EXISTING sessions (not during creation)
   useEffect(() => {
-    setTimeline([]);
-    setMessagesMap(new Map());
-    setSubagentsMap(new Map());
-    setAddedSubagentIds(new Set());
+    const currentId = currentSession?.id || null;
+    const previousId = lastSessionIdRef.current;
+
+    // Only clear state when switching between different REAL sessions
+    // Don't clear when:
+    // - previousId was null (first load or coming from no session)
+    // - previousId was 'pending' (transitioning from creation to real ID - same session!)
+    // - currentId is 'pending' (starting to create a new session)
+    const isRealSessionSwitch =
+      previousId !== null &&
+      previousId !== 'pending' &&
+      currentId !== null &&
+      currentId !== 'pending' &&
+      currentId !== previousId;
+
+    if (isRealSessionSwitch) {
+      setTimeline([]);
+      setMessagesMap(new Map());
+      setSubagentsMap(new Map());
+      setAddedSubagentIds(new Set());
+    }
+
+    lastSessionIdRef.current = currentId;
   }, [currentSession?.id]);
 
+  // Handle sending a message in an existing session
   const handleSend = async (content: string) => {
     if (!currentSession) return;
     await sendMessage(content, currentSession.session_name, currentSession.sdk_session_id || undefined);
   };
 
+  // Handle creating a new session and sending the first message
   const handleNewSessionSubmit = async () => {
     const name = sessionNameInput.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
     const message = initialMessageInput.trim();
     if (!name || !message) return;
 
-    // Reset modal state
+    // Clear form inputs
     setSessionNameInput('');
     setInitialMessageInput('');
-    onModalClose();
 
-    // Clear previous session state
+    // Clear any previous state explicitly (not via effect)
     setTimeline([]);
     setMessagesMap(new Map());
     setSubagentsMap(new Map());
     setAddedSubagentIds(new Set());
     clearFiles();
 
-    // Set a temporary session (will be updated with real ID after first message)
+    // Set temporary session BEFORE sending - this ensures UI shows chat view
     setCurrentSession({
       id: 'pending',
       user_id: user?.id || '',
@@ -123,7 +140,10 @@ export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession 
       updated_at: new Date().toISOString(),
     });
 
-    // Send the initial message (no existing SDK session ID for new session)
+    // Small delay to ensure React has processed the state update
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Send the initial message
     await sendMessage(message, name, undefined);
   };
 
@@ -349,6 +369,7 @@ export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession 
     }
   };
 
+  // Handle "New Chat" button - clears current session to show create form
   const handleNewChat = () => {
     setCurrentSession(null);
     clearFiles();
@@ -358,75 +379,87 @@ export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession 
     setAddedSubagentIds(new Set());
     setSessionNameInput('');
     setInitialMessageInput('');
-    onNewSession();
   };
+
+  // Render the inline session creation form
+  const renderSessionCreationForm = () => (
+    <div className="flex flex-col items-center justify-center h-full p-8">
+      <div className="w-full max-w-xl">
+        <h2 className="text-2xl font-semibold text-center mb-2">Start a New Session</h2>
+        <p className="text-muted-foreground text-center mb-8">
+          Name your session and describe what you want the agent to do.
+        </p>
+
+        <div className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium mb-2">Session Name</label>
+            <input
+              type="text"
+              value={sessionNameInput}
+              onChange={(e) => setSessionNameInput(e.target.value)}
+              placeholder="e.g., nba_research, project_alpha"
+              className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
+              autoFocus
+            />
+            <p className="text-xs text-muted-foreground mt-2">
+              Letters, numbers, underscores, and hyphens only
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">What would you like the agent to do?</label>
+            <textarea
+              value={initialMessageInput}
+              onChange={(e) => setInitialMessageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.metaKey) {
+                  handleNewSessionSubmit();
+                }
+              }}
+              placeholder="e.g., Search for NBA news and write a summary report..."
+              rows={5}
+              className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </div>
+
+          <button
+            onClick={handleNewSessionSubmit}
+            disabled={!sessionNameInput.trim() || !initialMessageInput.trim()}
+            className="w-full px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          >
+            Start Session
+          </button>
+
+          <p className="text-xs text-muted-foreground text-center">
+            Cmd + Enter to submit
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Render the chat view (when session exists)
+  const renderChatView = () => (
+    <>
+      {/* Messages */}
+      <main className="flex-1 overflow-y-auto p-4">
+        <MessageList
+          timeline={timeline}
+          messagesMap={messagesMap}
+          subagentsMap={subagentsMap}
+        />
+        <div ref={messagesEndRef} />
+      </main>
+
+      {/* Input */}
+      <footer className="border-t border-border p-4 flex-shrink-0">
+        <MessageInput onSend={handleSend} disabled={isStreaming} />
+      </footer>
+    </>
+  );
 
   return (
     <div className="flex flex-col h-full">
-      {/* New Session Modal */}
-      {showNewSessionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card border border-border rounded-lg p-6 w-full max-w-lg mx-4">
-            <h2 className="text-lg font-semibold mb-4">Start New Session</h2>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Session Name</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Letters, numbers, underscores, and hyphens only
-                </p>
-                <input
-                  type="text"
-                  value={sessionNameInput}
-                  onChange={(e) => setSessionNameInput(e.target.value)}
-                  placeholder="e.g., nba_research, project_alpha"
-                  className="w-full bg-input border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Initial Message</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  What would you like the agent to do?
-                </p>
-                <textarea
-                  value={initialMessageInput}
-                  onChange={(e) => setInitialMessageInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && e.metaKey) {
-                      handleNewSessionSubmit();
-                    }
-                  }}
-                  placeholder="e.g., Search for NBA news and write a summary..."
-                  rows={4}
-                  className="w-full bg-input border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={onModalClose}
-                className="flex-1 px-4 py-2 border border-border rounded hover:bg-accent"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleNewSessionSubmit}
-                disabled={!sessionNameInput.trim() || !initialMessageInput.trim()}
-                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
-              >
-                Start Session
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground text-center mt-3">
-              Cmd + Enter to submit
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <header className="flex items-center justify-between border-b border-border px-4 py-3 flex-shrink-0">
         <h1 className="text-lg font-semibold">Agent Chat</h1>
@@ -452,28 +485,8 @@ export function ChatInterface({ showNewSessionModal, onModalClose, onNewSession 
         </div>
       </header>
 
-      {/* Messages */}
-      <main className="flex-1 overflow-y-auto p-4">
-        {timeline.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            {currentSession
-              ? `Session "${currentSession.session_name}" ready. Send a message to continue.`
-              : 'Select a session or start a new one'}
-          </div>
-        ) : (
-          <MessageList
-            timeline={timeline}
-            messagesMap={messagesMap}
-            subagentsMap={subagentsMap}
-          />
-        )}
-        <div ref={messagesEndRef} />
-      </main>
-
-      {/* Input */}
-      <footer className="border-t border-border p-4 flex-shrink-0">
-        <MessageInput onSend={handleSend} disabled={isStreaming || !currentSession} />
-      </footer>
+      {/* Main content - either session creation form or chat */}
+      {currentSession ? renderChatView() : renderSessionCreationForm()}
     </div>
   );
 }

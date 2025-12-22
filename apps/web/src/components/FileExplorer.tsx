@@ -5,7 +5,6 @@ import type { AgentFile } from '@/types';
 import {
   FolderIcon,
   FolderOpenIcon,
-  PlusIcon,
   LoaderIcon,
   ArrowLeftIcon,
   getFileIcon,
@@ -13,10 +12,9 @@ import {
 
 interface FileExplorerProps {
   onFileClick: (file: AgentFile) => void;
-  onNewSession: () => void;
 }
 
-export function FileExplorer({ onFileClick, onNewSession }: FileExplorerProps) {
+export function FileExplorer({ onFileClick }: FileExplorerProps) {
   const {
     sessions,
     currentSession,
@@ -58,7 +56,7 @@ export function FileExplorer({ onFileClick, onNewSession }: FileExplorerProps) {
         </div>
       ) : sessions.length === 0 ? (
         <div className="p-4 text-sm text-muted-foreground">
-          No sessions yet. Click + to start one.
+          No sessions yet. Start one in the chat.
         </div>
       ) : (
         <div className="py-1">
@@ -142,15 +140,6 @@ export function FileExplorer({ onFileClick, onNewSession }: FileExplorerProps) {
         <h2 className="text-sm font-semibold text-foreground">
           {currentSession ? 'Files' : 'Sessions'}
         </h2>
-        {!currentSession && (
-          <button
-            onClick={onNewSession}
-            className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-            title="New Session"
-          >
-            <PlusIcon size={16} />
-          </button>
-        )}
       </div>
 
       {/* Content */}

@@ -4,26 +4,11 @@ import { FileProvider } from '@/contexts/FileContext';
 import { AuthPage } from '@/components/AuthPage';
 import { ChatInterface } from '@/components/ChatInterface';
 import { Layout } from '@/components/Layout';
-import { useState, useCallback } from 'react';
 
 function AppContent() {
-  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
-
-  const handleNewSession = useCallback(() => {
-    setShowNewSessionModal(true);
-  }, []);
-
-  const handleModalClose = useCallback(() => {
-    setShowNewSessionModal(false);
-  }, []);
-
   return (
-    <Layout onNewSession={handleNewSession}>
-      <ChatInterface
-        showNewSessionModal={showNewSessionModal}
-        onModalClose={handleModalClose}
-        onNewSession={handleNewSession}
-      />
+    <Layout>
+      <ChatInterface />
     </Layout>
   );
 }

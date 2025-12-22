@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessions } from '@/contexts/SessionContext';
 import { useFiles } from '@/contexts/FileContext';
-import { streamAgentQuery } from '@/lib/api';
+import { streamAgentQuery, getSessionMessages } from '@/lib/api';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import type {
@@ -104,6 +104,45 @@ export function ChatInterface() {
     }
 
     lastSessionIdRef.current = currentId;
+  }, [currentSession?.id]);
+
+  // Load messages from backend when a real session is selected (including on page refresh)
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!currentSession || currentSession.id === 'pending') return;
+
+      // Don't reload if we already have messages (e.g., just created them)
+      if (timeline.length > 0) return;
+
+      try {
+        const messages = await getSessionMessages(currentSession.id);
+
+        const newTimeline: TimelineItem[] = [];
+        const newMessagesMap = new Map<string, ChatMessage>();
+
+        messages.forEach((msg) => {
+          const chatMessage: ChatMessage = {
+            id: msg.id,
+            type: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content,
+            timestamp: new Date(msg.created_at),
+          };
+          newMessagesMap.set(msg.id, chatMessage);
+          newTimeline.push({
+            type: 'message',
+            id: msg.id,
+            timestamp: new Date(msg.created_at),
+          });
+        });
+
+        setMessagesMap(newMessagesMap);
+        setTimeline(newTimeline);
+      } catch (error) {
+        console.error('Failed to load session messages:', error);
+      }
+    };
+
+    loadMessages();
   }, [currentSession?.id]);
 
   // Handle sending a message in an existing session

@@ -1,6 +1,8 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { SessionWithFiles } from '@/types';
-import { getSessions, restoreSession } from '@/lib/api';
+import { getSessions, getSession, restoreSession } from '@/lib/api';
+
+const CURRENT_SESSION_KEY = 'agent-app-current-session-id';
 
 interface SessionContextType {
   sessions: SessionWithFiles[];
@@ -18,6 +20,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionWithFiles[]>([]);
   const [currentSession, setCurrentSessionState] = useState<SessionWithFiles | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Restore current session from localStorage on mount
+  useEffect(() => {
+    const restoreCurrentSession = async () => {
+      const savedSessionId = localStorage.getItem(CURRENT_SESSION_KEY);
+      if (savedSessionId && savedSessionId !== 'pending') {
+        try {
+          const session = await getSession(savedSessionId);
+          setCurrentSessionState(session);
+        } catch (error) {
+          console.error('Failed to restore session from localStorage:', error);
+          localStorage.removeItem(CURRENT_SESSION_KEY);
+        }
+      }
+      setIsInitialized(true);
+    };
+
+    restoreCurrentSession();
+  }, []);
+
+  // Persist current session ID to localStorage whenever it changes
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    if (currentSession && currentSession.id !== 'pending') {
+      localStorage.setItem(CURRENT_SESSION_KEY, currentSession.id);
+    } else if (!currentSession) {
+      localStorage.removeItem(CURRENT_SESSION_KEY);
+    }
+  }, [currentSession, isInitialized]);
 
   const loadSessions = useCallback(async () => {
     setIsLoadingSessions(true);

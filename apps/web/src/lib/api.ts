@@ -26,6 +26,22 @@ export async function getSession(sessionId: string): Promise<SessionWithFiles> {
   return session;
 }
 
+export interface StoredMessage {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+export async function getSessionMessages(sessionId: string): Promise<StoredMessage[]> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/sessions/${sessionId}/messages`, { headers });
+  if (!res.ok) throw new Error('Failed to fetch messages');
+  const { messages } = await res.json();
+  return messages;
+}
+
 // Files API
 export async function getSessionFiles(sessionId: string): Promise<AgentFile[]> {
   const headers = await getAuthHeaders();

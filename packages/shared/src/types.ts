@@ -14,9 +14,16 @@ export interface ChatSession {
   id: string; // This IS the SDK session ID
   user_id: string;
   agent_id: string;
+  session_name?: string;
   title?: string;
   created_at: string;
   updated_at: string;
+}
+
+// Request type for session creation with agent config
+export interface CreateSessionRequest {
+  sessionName: string;
+  agentId: string;
 }
 
 export interface ChatMessage {

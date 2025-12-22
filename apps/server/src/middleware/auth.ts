@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase.js';
 export interface AuthUser {
   id: string;
   email: string;
+  isAdmin: boolean;
 }
 
 declare module 'hono' {
@@ -29,7 +30,18 @@ export const authMiddleware = createMiddleware(async (c, next) => {
       return c.json({ error: 'Invalid token' }, 401);
     }
 
-    c.set('user', { id: user.id, email: user.email! });
+    // Fetch admin status from profiles
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('is_admin')
+      .eq('id', user.id)
+      .single();
+
+    c.set('user', {
+      id: user.id,
+      email: user.email!,
+      isAdmin: profile?.is_admin ?? false,
+    });
     c.set('accessToken', token);
     await next();
   } catch (error) {

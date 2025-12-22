@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import type { AgentFile } from '@/types';
 import { getSessionFiles, getFileContent } from '@/lib/api';
+import { isHiddenFile } from '@agent-app/shared';
 
 interface OpenTab {
   file: AgentFile;
@@ -40,6 +41,12 @@ export function FileProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addOrUpdateFile = useCallback((file: AgentFile) => {
+    // Skip hidden files (CLAUDE.md, .claude/, shared/)
+    // TODO: Pass canWriteShared from agent config for admin users
+    if (isHiddenFile(file.filePath, false)) {
+      return;
+    }
+
     setFilesState(prev => {
       const existing = prev.findIndex(f => f.id === file.id);
       if (existing >= 0) {
@@ -80,7 +87,12 @@ export function FileProvider({ children }: { children: ReactNode }) {
     setIsLoadingFiles(true);
     try {
       const sessionFiles = await getSessionFiles(sessionId);
-      setFilesState(sessionFiles);
+      // Filter out hidden files (CLAUDE.md, .claude/, shared/)
+      // TODO: Pass canWriteShared from agent config for admin users
+      const visibleFiles = sessionFiles.filter(
+        (file) => !isHiddenFile(file.filePath, false)
+      );
+      setFilesState(visibleFiles);
     } catch (error) {
       console.error('Failed to load files:', error);
       setFilesState([]);

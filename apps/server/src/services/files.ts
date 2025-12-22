@@ -5,11 +5,31 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { glob } from 'glob';
 import { supabase } from '../lib/supabase.js';
+import { isAgentConfigFile, isSharedFile } from '@agent-app/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Resolve to repo root /data directory (from apps/server/src/services/)
 const DATA_DIR = path.resolve(__dirname, '../../../../data');
 const BUCKET_NAME = 'agent-files';
+const SHARED_PREFIX = 'shared';
+
+/**
+ * Get storage path based on whether writing to shared or user storage
+ */
+function getStoragePath(
+  userId: string,
+  agentId: string,
+  sessionName: string,
+  relativePath: string,
+  isShared: boolean
+): string {
+  if (isShared) {
+    // Shared files: shared/{agentId}/{relativePath}
+    return path.join(SHARED_PREFIX, agentId, relativePath).replace(/\\/g, '/');
+  }
+  // User files: {userId}/{sessionName}/{relativePath}
+  return path.join(userId, sessionName, relativePath).replace(/\\/g, '/');
+}
 
 export interface FileInfo {
   id: string;
@@ -52,12 +72,14 @@ export function getSessionDir(sessionId: string): string {
   return path.join(DATA_DIR, sessionId);
 }
 
-// Persist a file to Supabase Storage
+// Persist a file to Supabase Storage (user or shared)
 export async function persistFile(
   userId: string,
   sessionId: string,      // UUID for database
   sessionName: string,    // Human-readable folder name
-  localFilePath: string
+  agentId: string,        // Agent type ID
+  localFilePath: string,
+  isShared: boolean = false
 ): Promise<FileInfo | null> {
   try {
     // Read file content
@@ -74,9 +96,10 @@ export async function persistFile(
       return null;
     }
 
-    // Storage path: {userId}/{sessionName}/{relativePath}
-    const storagePath = `${userId}/${sessionName}/${relativePath}`;
+    const storagePath = getStoragePath(userId, agentId, sessionName, relativePath, isShared);
     const fileType = path.extname(relativePath).slice(1) || 'txt';
+
+    console.log(`[FILES] Persisting file to ${isShared ? 'shared' : 'user'} storage:`, storagePath);
 
     // Upload to Supabase Storage
     const { error: uploadError } = await supabase.storage
@@ -103,6 +126,8 @@ export async function persistFile(
         file_type: fileType,
         file_size: content.length,
         content_hash: contentHash,
+        is_shared: isShared,
+        agent_id: agentId,
         updated_at: new Date().toISOString(),
       }, {
         onConflict: 'session_id,file_path',
@@ -246,7 +271,9 @@ async function getExistingFileHash(sessionId: string, relativePath: string): Pro
 export async function flushSessionFolder(
   userId: string,
   sessionId: string,    // UUID for database
-  sessionName: string   // Human-readable folder name
+  sessionName: string,  // Human-readable folder name
+  agentId: string = 'default',
+  isShared: boolean = false
 ): Promise<FileInfo[]> {
   const sessionDir = getSessionDir(sessionName);
 
@@ -262,11 +289,24 @@ export async function flushSessionFolder(
     dot: false, // Skip hidden files
   });
 
-  console.log('[FILES] Found files in session folder:', files);
+  console.log(`[FILES] Flushing ${files.length} files from ${sessionDir} (shared: ${isShared})`);
 
   const persistedFiles: FileInfo[] = [];
 
   for (const relativePath of files) {
+    // Skip agent config files (CLAUDE.md, .claude/) - these are never persisted
+    if (isAgentConfigFile(relativePath)) {
+      console.log('[FILES] Skipping agent config file:', relativePath);
+      continue;
+    }
+
+    // Skip shared files when writing to user storage (they already exist in shared storage)
+    // But DO persist them when writing to shared storage (admin agent)
+    if (!isShared && isSharedFile(relativePath)) {
+      console.log('[FILES] Skipping shared file (already in shared storage):', relativePath);
+      continue;
+    }
+
     const localPath = path.join(sessionDir, relativePath);
 
     try {
@@ -285,7 +325,7 @@ export async function flushSessionFolder(
       console.log('[FILES] Persisting file:', relativePath, existingHash ? '(modified)' : '(new)');
 
       // Persist the file
-      const fileInfo = await persistFile(userId, sessionId, sessionName, localPath);
+      const fileInfo = await persistFile(userId, sessionId, sessionName, agentId, localPath, isShared);
       if (fileInfo) {
         persistedFiles.push(fileInfo);
       }

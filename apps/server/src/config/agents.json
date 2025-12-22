@@ -1,0 +1,67 @@
+{
+  "version": "1.0.0",
+  "defaultAgentId": "default",
+  "agents": {
+    "default": {
+      "id": "default",
+      "name": "Default Coding Agent",
+      "description": "General-purpose coding assistant",
+      "configDir": "default",
+      "storageMode": "session-persistent",
+      "isolation": "strict",
+      "fileLoading": {
+        "sharedFiles": "none"
+      },
+      "security": {
+        "network": "full",
+        "allowedTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task", "Skill", "TodoWrite"]
+      },
+      "startup": {
+        "strategy": "on-demand"
+      },
+      "canWriteShared": false
+    },
+    "sports-nfl": {
+      "id": "sports-nfl",
+      "name": "NFL Sports Prediction Agent",
+      "description": "NFL game predictions and analysis for users",
+      "configDir": "sports-nfl",
+      "storageMode": "session-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "includePatterns": ["predictions/**", "reflections/**", "research/**"],
+        "maxSharedBytes": 104857600
+      },
+      "security": {
+        "network": "none",
+        "allowedTools": ["Read", "Write", "Glob", "Grep", "TodoWrite"]
+      },
+      "startup": {
+        "strategy": "pre-warm-on-login",
+        "warmupTTL": 300
+      },
+      "canWriteShared": false
+    },
+    "sports-nfl-admin": {
+      "id": "sports-nfl-admin",
+      "name": "NFL Sports Admin Agent",
+      "description": "Admin agent for generating NFL predictions",
+      "configDir": "sports-nfl-admin",
+      "storageMode": "shared-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "includePatterns": ["predictions/**", "reflections/**", "research/**"]
+      },
+      "security": {
+        "network": "full",
+        "allowedTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task", "Skill", "TodoWrite"]
+      },
+      "startup": {
+        "strategy": "on-demand"
+      },
+      "canWriteShared": true
+    }
+  }
+}

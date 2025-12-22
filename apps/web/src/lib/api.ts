@@ -66,6 +66,34 @@ export async function restoreSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to restore session');
 }
 
+/**
+ * Pre-warm container with shared files
+ * Call after successful login to reduce first-query latency
+ */
+export async function warmupAgent(agentId: string = 'default'): Promise<{ status: string; sessionName?: string; filesLoaded?: number; ttl?: number } | null> {
+  try {
+    const headers = await getAuthHeaders();
+    const res = await fetch('/api/agent/warmup', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ agentId }),
+    });
+
+    if (!res.ok) {
+      console.warn('[WARMUP] Warmup failed:', res.status);
+      return null;
+    }
+
+    const result = await res.json();
+    console.log('[WARMUP] Result:', result);
+    return result;
+  } catch (error) {
+    // Ignore errors - warmup is best-effort
+    console.warn('[WARMUP] Error:', error);
+    return null;
+  }
+}
+
 // Stream agent query with session name and optional SDK session ID for resuming
 export async function* streamAgentQuery(
   content: string,

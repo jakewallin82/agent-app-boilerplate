@@ -14,6 +14,7 @@ import {
 import { getAgentConfig } from '../services/agentConfig.js';
 import { loadSharedFilesIntoSession, loadAgentConfigIntoSession } from '../services/sharedFiles.js';
 import { setWarmedSession, consumeWarmedSession, getWarmupCacheStats } from '../services/warmupCache.js';
+import { getAllowedTools, getSandboxSystemPrompt } from '../services/toolSandbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -117,12 +118,19 @@ agentRouter.post('/query', async (c) => {
     }
   }
 
+  // Get allowed tools from config (handles network restrictions)
+  const allowedTools = getAllowedTools(config);
+  console.log(`[AGENT] Allowed tools for ${agentId}:`, allowedTools);
+
+  // Build sandbox prompt for network restrictions
+  const sandboxPrompt = getSandboxSystemPrompt(config);
+
   // Build prompt with session context
   const promptWithContext = `[Session Name: ${sessionName}]
 [Output Directory: ${sessionDir}]
 
 IMPORTANT: Save all output files to the current working directory using relative paths (e.g., ./report.md).
-
+${sandboxPrompt ? `\n${sandboxPrompt}` : ''}
 ---
 
 ${content}`;
@@ -138,7 +146,7 @@ ${content}`;
           cwd: sessionDir,
           maxTurns: 100,
           settingSources: ['project'],  // Load CLAUDE.md from session directory
-          allowedTools: config.security.allowedTools,  // Use config's allowed tools
+          allowedTools,  // Use tools from getAllowedTools (handles network restrictions)
           ...(existingSessionId && { resume: existingSessionId }),
         },
       });

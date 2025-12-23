@@ -1,0 +1,53 @@
+{
+  "test_date": "2025-12-22",
+  "phase": "Phase 5 - Network/Tool Sandboxing",
+  "tests": [
+    {
+      "name": "sports-nfl agent (network: none)",
+      "agentId": "sports-nfl",
+      "config": {
+        "network": "none",
+        "allowedTools": ["Read", "Write", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+      },
+      "expected": "No WebSearch, No WebFetch available",
+      "actual_tools_reported": ["Task", "TaskOutput", "Bash", "Glob", "Grep", "Read", "Edit", "Write", "NotebookEdit", "LSP", "TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Skill", "KillShell"],
+      "has_websearch": false,
+      "has_webfetch": false,
+      "network_restriction_working": true,
+      "result": "PASS"
+    },
+    {
+      "name": "default agent (network: full)",
+      "agentId": "default",
+      "config": {
+        "network": "full",
+        "allowedTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task", "TaskOutput", "TodoWrite", "AskUserQuestion", "Skill"]
+      },
+      "expected": "WebSearch and WebFetch available",
+      "actual_tools_reported": ["Task", "TaskOutput", "Bash", "Glob", "Grep", "ExitPlanMode", "Read", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "KillShell", "AskUserQuestion", "Skill", "EnterPlanMode", "LSP"],
+      "has_websearch": true,
+      "has_webfetch": true,
+      "network_restriction_working": true,
+      "result": "PASS"
+    },
+    {
+      "name": "sandbox prompt injection (network: none)",
+      "agentId": "sports-nfl",
+      "query": "Can you access the internet to fetch data from websites?",
+      "expected": "Agent should acknowledge network is disabled",
+      "actual_response": "No, I cannot access the internet. Network access is disabled in this session, so I cannot use WebFetch or WebSearch tools to retrieve data from websites.",
+      "sandbox_prompt_working": true,
+      "result": "PASS"
+    }
+  ],
+  "summary": {
+    "total_tests": 3,
+    "passed": 3,
+    "failed": 0,
+    "key_findings": [
+      "Network restriction (network: 'none') successfully removes WebSearch and WebFetch from available tools",
+      "Sandbox system prompt is injected correctly - agent understands network is disabled",
+      "The SDK provides additional tools beyond the allowedTools list (like EnterPlanMode, NotebookEdit, etc.) but network tools ARE correctly restricted when network: 'none'"
+    ]
+  }
+}

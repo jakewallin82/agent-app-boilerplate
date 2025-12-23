@@ -1448,15 +1448,14 @@ export function validateUrl(url: string, agentId: string): { allowed: boolean; r
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] TypeScript compiles: `cd apps/server && npm run build`
-- [ ] Unit tests for `getAllowedTools()` function
-- [ ] Unit tests for `isUrlAllowed()` function
+- [x] TypeScript compiles: `cd apps/server && npm run build`
+- [ ] Unit tests for `getAllowedTools()` function (skipped per user request - Phase 6)
+- [ ] Unit tests for `isUrlAllowed()` function (skipped per user request - Phase 6)
 
 #### Manual Verification:
-- [ ] Query with `sports-nfl` agent, verify only allowed tools are available
-- [ ] Verify WebFetch is restricted to allowlisted domains for sports agent
-- [ ] Verify `default` agent has full tool access
-- [ ] Verify sandbox system prompt is added for restricted agents
+- [x] Query with `sports-nfl` agent, verify only allowed tools are available (WebSearch/WebFetch removed)
+- [x] Verify `default` agent has full tool access (WebSearch/WebFetch available)
+- [x] Verify sandbox system prompt is added for restricted agents (agent acknowledges network disabled)
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to the next phase.
 

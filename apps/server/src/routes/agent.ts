@@ -158,6 +158,23 @@ ${content}`;
       },
     };
 
+    // Add initial user message to session state (SDK doesn't emit this)
+    // Format matches what deriveUserView expects for user messages
+    const initialUserMessage = {
+      type: 'user',
+      uuid: crypto.randomUUID(),
+      message: {
+        content: [{ type: 'text', text: content }],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    sessionState.messages.push(initialUserMessage);
+
+    // Emit the initial user message so frontend rawMessages includes it
+    await stream.writeSSE({
+      data: JSON.stringify(initialUserMessage),
+    });
+
     try {
       const queryIterator = query({
         prompt: promptWithContext,
@@ -179,6 +196,28 @@ ${content}`;
           sdkSessionId = message.session_id;
           sessionState.sessionId = sdkSessionId || '';
           console.log('[AGENT] SDK Session ID:', sdkSessionId);
+
+          // Create session record IMMEDIATELY so frontend can navigate to /sessionName
+          if (sdkSessionId) {
+            console.log('[AGENT] Creating session record (early):', sdkSessionId);
+            const { error: sessionError } = await supabase
+              .from('sessions')
+              .upsert({
+                id: sdkSessionId,
+                user_id: user.id,
+                sdk_session_id: sdkSessionId,
+                session_name: sessionName,
+                agent_id: agentId,
+                title: sessionName,
+                updated_at: new Date().toISOString(),
+              }, {
+                onConflict: 'id',
+              });
+
+            if (sessionError) {
+              console.error('[AGENT] Session upsert error:', sessionError);
+            }
+          }
         }
 
         // Count tool calls for metadata
@@ -212,32 +251,30 @@ ${content}`;
         });
       }
 
-      // Save session to DB FIRST (before file flush, due to foreign key constraint)
+      // Update session timestamp (session was already created on init message)
       if (sdkSessionId) {
-        console.log('[AGENT] Creating session record:', sdkSessionId);
-        const { error: sessionError } = await supabase
+        await supabase
           .from('sessions')
-          .upsert({
-            id: sdkSessionId,
-            user_id: user.id,
-            sdk_session_id: sdkSessionId,
-            session_name: sessionName,
-            agent_id: agentId,
-            title: sessionName,
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: 'id',
-          });
-
-        if (sessionError) {
-          console.error('[AGENT] Session upsert error:', sessionError);
-        }
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', sdkSessionId);
       }
 
       // Flush session folder - persist all files to Supabase
       if (!sdkSessionId) {
         console.log('[AGENT] No SDK session ID, skipping file flush');
       }
+      // Write session state file BEFORE flush so it gets uploaded to Supabase
+      sessionState.endTime = new Date().toISOString();
+      try {
+        await writeFile(
+          path.join(sessionDir, '.session-state.json'),
+          JSON.stringify(sessionState, null, 2)
+        );
+        console.log('[AGENT] Session state saved:', path.join(sessionDir, '.session-state.json'));
+      } catch (stateError) {
+        console.error('[AGENT] Failed to save session state:', stateError);
+      }
+
       // Determine if files should go to shared storage (admin using shared-persistent agent)
       const isShared = config.canWriteShared && user.isAdmin;
       console.log('[AGENT] Flushing session folder:', sessionName, 'with session ID:', sdkSessionId, 'shared:', isShared);
@@ -257,18 +294,6 @@ ${content}`;
       }
 
       console.log('[AGENT] Flushed', persistedFiles.length, 'files');
-
-      // Write session state file for dev mode debugging
-      sessionState.endTime = new Date().toISOString();
-      try {
-        await writeFile(
-          path.join(sessionDir, '.session-state.json'),
-          JSON.stringify(sessionState, null, 2)
-        );
-        console.log('[AGENT] Session state saved:', path.join(sessionDir, '.session-state.json'));
-      } catch (stateError) {
-        console.error('[AGENT] Failed to save session state:', stateError);
-      }
 
       // Save messages
       if (sdkSessionId) {

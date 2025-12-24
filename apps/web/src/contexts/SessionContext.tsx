@@ -1,8 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import type { SessionWithFiles } from '@/types';
-import { getSessions, getSession, restoreSession } from '@/lib/api';
-
-const CURRENT_SESSION_KEY = 'agent-app-current-session-id';
+import { getSessions, getSessionByName, restoreSession } from '@/lib/api';
 
 interface SessionContextType {
   sessions: SessionWithFiles[];
@@ -17,40 +16,44 @@ interface SessionContextType {
 const SessionContext = createContext<SessionContextType | undefined>(undefined);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
+  const { sessionName } = useParams<{ sessionName?: string }>();
+  const navigate = useNavigate();
+
   const [sessions, setSessions] = useState<SessionWithFiles[]>([]);
   const [currentSession, setCurrentSessionState] = useState<SessionWithFiles | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Restore current session from localStorage on mount
+  // Load session from URL on mount or when URL changes
   useEffect(() => {
-    const restoreCurrentSession = async () => {
-      const savedSessionId = localStorage.getItem(CURRENT_SESSION_KEY);
-      if (savedSessionId && savedSessionId !== 'pending') {
+    const loadSessionFromUrl = async () => {
+      if (sessionName) {
         try {
-          const session = await getSession(savedSessionId);
-          setCurrentSessionState(session);
+          const session = await getSessionByName(sessionName);
+          if (session) {
+            setCurrentSessionState(session);
+            // Restore files to container in background
+            restoreSession(session.id).catch((error) => {
+              console.error('Failed to restore session:', error);
+            });
+          } else {
+            // Session not found, redirect to home
+            console.warn(`Session '${sessionName}' not found, redirecting to home`);
+            navigate('/', { replace: true });
+          }
         } catch (error) {
-          console.error('Failed to restore session from localStorage:', error);
-          localStorage.removeItem(CURRENT_SESSION_KEY);
+          console.error('Failed to load session from URL:', error);
+          navigate('/', { replace: true });
         }
+      } else {
+        // No session in URL, clear current session
+        setCurrentSessionState(null);
       }
       setIsInitialized(true);
     };
 
-    restoreCurrentSession();
-  }, []);
-
-  // Persist current session ID to localStorage whenever it changes
-  useEffect(() => {
-    if (!isInitialized) return;
-
-    if (currentSession && currentSession.id !== 'pending') {
-      localStorage.setItem(CURRENT_SESSION_KEY, currentSession.id);
-    } else if (!currentSession) {
-      localStorage.removeItem(CURRENT_SESSION_KEY);
-    }
-  }, [currentSession, isInitialized]);
+    loadSessionFromUrl();
+  }, [sessionName, navigate]);
 
   const loadSessions = useCallback(async () => {
     setIsLoadingSessions(true);
@@ -65,18 +68,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectSession = useCallback(async (session: SessionWithFiles) => {
-    // Set current session immediately so UI updates right away
-    setCurrentSessionState(session);
-
-    // Restore files to container in background (for resuming work)
-    restoreSession(session.id).catch((error) => {
-      console.error('Failed to restore session:', error);
-    });
-  }, []);
+    // Navigate to session URL - this will trigger the effect above
+    navigate(`/${session.session_name}`);
+  }, [navigate]);
 
   const setCurrentSession = useCallback((session: SessionWithFiles | null) => {
-    setCurrentSessionState(session);
-  }, []);
+    if (session) {
+      // If setting a session (e.g., during creation), update state but don't navigate yet
+      // (we'll navigate after we have the real session name/ID)
+      setCurrentSessionState(session);
+    } else {
+      // Clearing session - navigate to root
+      setCurrentSessionState(null);
+      navigate('/');
+    }
+  }, [navigate]);
 
   const updateCurrentSession = useCallback((updates: Partial<SessionWithFiles>) => {
     setCurrentSessionState(prev => {

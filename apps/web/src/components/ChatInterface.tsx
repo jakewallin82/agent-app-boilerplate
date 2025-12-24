@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessions } from '@/contexts/SessionContext';
 import { useFiles } from '@/contexts/FileContext';
@@ -7,6 +8,7 @@ import { streamAgentQuery, getSessionMessages } from '@/lib/api';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { DevModeMessageList } from './DevModeMessageList';
+import { deriveUserView, processSubagentMessages } from '@/lib/messageUtils';
 import type {
   ChatMessage,
   Subagent,
@@ -55,10 +57,16 @@ function extractToolCalls(message: any): ToolUseBlock[] {
 }
 
 export function ChatInterface() {
+  const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { currentSession, setCurrentSession, updateCurrentSession, loadSessions } = useSessions();
   const { addOrUpdateFile, clearFiles } = useFiles();
-  const { isDevMode, setDevMode, isAdmin, openSubagentTab } = useDevMode();
+  const {
+    isDevMode, setDevMode, isAdmin, openSubagentTab,
+    rawMessages, setRawMessages, subagentRawMessages, setSubagentRawMessages,
+    persistCurrentSession, loadSessionFromStorage, setCurrentSessionId,
+    markCurrentSessionComplete, isWaitingForServerCompletion, stopPolling
+  } = useDevMode();
 
   // Session creation form state (shown when no session)
   const [sessionNameInput, setSessionNameInput] = useState('');
@@ -70,8 +78,7 @@ export function ChatInterface() {
   const [subagentsMap, setSubagentsMap] = useState<Map<string, Subagent>>(new Map());
   const [addedSubagentIds, setAddedSubagentIds] = useState<Set<string>>(new Set());
 
-  // Dev mode: use context for raw SDK messages (shared with Layout for right panel)
-  const { rawMessages, setRawMessages, subagentRawMessages, setSubagentRawMessages } = useDevMode();
+  // Raw messages come from DevModeContext (already destructured above)
 
   const [isStreaming, setIsStreaming] = useState(false);
   const isSendingRef = useRef(false);
@@ -112,13 +119,57 @@ export function ChatInterface() {
     lastSessionIdRef.current = currentId;
   }, [currentSession?.id]);
 
-  // Load messages from backend when a real session is selected (including on page refresh)
+  // Update currentSessionId in context when session changes
+  useEffect(() => {
+    if (currentSession?.id && currentSession.id !== 'pending') {
+      setCurrentSessionId(currentSession.id);
+    }
+  }, [currentSession?.id, setCurrentSessionId]);
+
+  // Derive user view from raw messages (works for both live and history)
+  const derivedUserView = useMemo(() => {
+    if (rawMessages.length === 0) return null;
+    const base = deriveUserView(rawMessages);
+    // Process subagent messages to populate tool calls
+    const enhancedSubagentsMap = processSubagentMessages(subagentRawMessages, base.subagentsMap);
+    return {
+      ...base,
+      subagentsMap: enhancedSubagentsMap,
+    };
+  }, [rawMessages, subagentRawMessages]);
+
+  // Persist to localStorage after each SSE message
+  // Mark as streaming if currently streaming, so we can detect interrupted sessions
+  useEffect(() => {
+    if (rawMessages.length > 0 && currentSession?.id && currentSession.id !== 'pending') {
+      persistCurrentSession(isStreaming);
+    }
+  }, [rawMessages, currentSession?.id, persistCurrentSession, isStreaming]);
+
+  // Try to recover session from storage on refresh
+  useEffect(() => {
+    const loadStoredSession = async () => {
+      if (!currentSession || currentSession.id === 'pending') return;
+      // Only try to load from storage if we don't have messages yet
+      if (timeline.length > 0 || rawMessages.length > 0) return;
+
+      const loaded = await loadSessionFromStorage(currentSession.id);
+      if (loaded) {
+        console.log('Session recovered from storage');
+      }
+    };
+
+    loadStoredSession();
+  }, [currentSession?.id, timeline.length, rawMessages.length, loadSessionFromStorage]);
+
+  // Load messages from backend as fallback when no rawMessages available
+  // This only runs if we couldn't load from localStorage or Supabase Storage
   useEffect(() => {
     const loadMessages = async () => {
       if (!currentSession || currentSession.id === 'pending') return;
 
-      // Don't reload if we already have messages (e.g., just created them)
-      if (timeline.length > 0) return;
+      // Don't reload if we already have messages from storage or streaming
+      if (timeline.length > 0 || rawMessages.length > 0) return;
 
       try {
         const messages = await getSessionMessages(currentSession.id);
@@ -149,7 +200,7 @@ export function ChatInterface() {
     };
 
     loadMessages();
-  }, [currentSession?.id]);
+  }, [currentSession?.id, rawMessages.length, timeline.length]);
 
   // Handle sending a message in an existing session
   const handleSend = async (content: string) => {
@@ -197,6 +248,9 @@ export function ChatInterface() {
   const sendMessage = async (content: string, sessionName: string, existingSdkSessionId?: string) => {
     if (isSendingRef.current || !sessionName) return;
     isSendingRef.current = true;
+
+    // Stop any recovery polling - user is actively sending messages
+    stopPolling();
 
     console.log('[SEND] Sending message with session:', sessionName, 'sdkSessionId:', existingSdkSessionId || 'new');
 
@@ -267,6 +321,8 @@ export function ChatInterface() {
               id: newSessionId,
               sdk_session_id: newSessionId,
             });
+            // Navigate to session URL (use sessionName parameter, not stale closure)
+            navigate(`/${sessionName}`, { replace: true });
             // Reload sessions list to show the new session
             loadSessions();
           }
@@ -431,11 +487,14 @@ export function ChatInterface() {
     } finally {
       setIsStreaming(false);
       isSendingRef.current = false;
+      // Mark session as complete in localStorage so we don't poll on next refresh
+      markCurrentSessionComplete();
     }
   };
 
   // Handle "New Chat" button - clears current session to show create form
   const handleNewChat = () => {
+    stopPolling(); // Stop any recovery polling
     setCurrentSession(null);
     clearFiles();
     setTimeline([]);
@@ -505,9 +564,24 @@ export function ChatInterface() {
     </div>
   );
 
+  // Use derived view when available (from rawMessages), otherwise use live state
+  const displayTimeline = derivedUserView?.timeline ?? timeline;
+  const displayMessagesMap = derivedUserView?.messagesMap ?? messagesMap;
+  const displaySubagentsMap = derivedUserView?.subagentsMap ?? subagentsMap;
+
   // Render the chat view (when session exists)
   const renderChatView = () => (
     <>
+      {/* Recovery Banner - shown when we detected an interrupted session */}
+      {isWaitingForServerCompletion && (
+        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-2 flex items-center gap-2">
+          <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+          <span className="text-yellow-400 text-sm">
+            Session was interrupted. Waiting for server to complete...
+          </span>
+        </div>
+      )}
+
       {/* Messages */}
       <main className="flex-1 overflow-y-auto p-4">
         {isDevMode ? (
@@ -517,9 +591,9 @@ export function ChatInterface() {
           />
         ) : (
           <MessageList
-            timeline={timeline}
-            messagesMap={messagesMap}
-            subagentsMap={subagentsMap}
+            timeline={displayTimeline}
+            messagesMap={displayMessagesMap}
+            subagentsMap={displaySubagentsMap}
           />
         )}
         <div ref={messagesEndRef} />

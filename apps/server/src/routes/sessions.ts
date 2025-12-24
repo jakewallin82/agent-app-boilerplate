@@ -69,6 +69,34 @@ sessionsRouter.post('/', async (c) => {
   return c.json({ session: data as ChatSession });
 });
 
+// Get session by name
+sessionsRouter.get('/by-name/:name', async (c) => {
+  const user = c.get('user');
+  const sessionName = c.req.param('name');
+
+  const { data, error } = await supabase
+    .from('sessions')
+    .select(`
+      *,
+      file_count:agent_files(count)
+    `)
+    .eq('session_name', sessionName)
+    .eq('user_id', user.id)
+    .single();
+
+  if (error || !data) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  // Transform file_count from array to number
+  const session = {
+    ...data,
+    file_count: data.file_count?.[0]?.count || 0,
+  };
+
+  return c.json({ session: session as ChatSession });
+});
+
 // Get session by ID
 sessionsRouter.get('/:id', async (c) => {
   const user = c.get('user');
@@ -151,6 +179,44 @@ sessionsRouter.post('/:id/messages', async (c) => {
     .eq('id', sessionId);
 
   return c.json({ message: data as ChatMessage });
+});
+
+// Get session state file (own session or admin can view any)
+sessionsRouter.get('/:id/state', async (c) => {
+  const user = c.get('user');
+  const sessionId = c.req.param('id');
+
+  // Get session info
+  const { data: session, error: sessionError } = await supabase
+    .from('sessions')
+    .select('session_name, user_id')
+    .eq('id', sessionId)
+    .single();
+
+  if (sessionError || !session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  // Check authorization: own session OR admin
+  if (session.user_id !== user.id && !user.isAdmin) {
+    return c.json({ error: 'Not authorized' }, 403);
+  }
+
+  // Download session state from storage
+  const storagePath = `${session.user_id}/${session.session_name}/.session-state.json`;
+
+  const { data, error } = await supabase.storage
+    .from('agent-files')
+    .download(storagePath);
+
+  if (error) {
+    return c.json({ error: 'Session state not found', code: 'NO_STATE_FILE' }, 404);
+  }
+
+  const text = await data.text();
+  const sessionState = JSON.parse(text);
+
+  return c.json({ sessionState });
 });
 
 // Admin: List ALL sessions

@@ -1,3 +1,4 @@
+import { Routes, Route } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { SessionProvider } from '@/contexts/SessionContext';
 import { FileProvider } from '@/contexts/FileContext';
@@ -8,9 +9,14 @@ import { Layout } from '@/components/Layout';
 
 function AppContent() {
   return (
-    <Layout>
-      <ChatInterface />
-    </Layout>
+    // SessionProvider must be inside Route to access useParams
+    <SessionProvider>
+      <FileProvider>
+        <Layout>
+          <ChatInterface />
+        </Layout>
+      </FileProvider>
+    </SessionProvider>
   );
 }
 
@@ -31,11 +37,10 @@ export default function App() {
 
   return (
     <DevModeProvider>
-      <SessionProvider>
-        <FileProvider>
-          <AppContent />
-        </FileProvider>
-      </SessionProvider>
+      <Routes>
+        {/* Route with optional session name parameter */}
+        <Route path="/:sessionName?" element={<AppContent />} />
+      </Routes>
     </DevModeProvider>
   );
 }

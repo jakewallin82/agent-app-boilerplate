@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { useSessions } from '@/contexts/SessionContext';
 import { useFiles } from '@/contexts/FileContext';
-import type { AgentFile } from '@/types';
+import { useDevMode } from '@/contexts/DevModeContext';
+import type { AgentFile, SessionWithFiles } from '@/types';
 import {
   FolderIcon,
   FolderOpenIcon,
@@ -25,6 +26,7 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
   } = useSessions();
 
   const { files, isLoadingFiles, loadSessionFiles, clearFiles } = useFiles();
+  const { setRawMessages, setSubagentRawMessages } = useDevMode();
 
   // Load sessions on mount
   useEffect(() => {
@@ -44,6 +46,20 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
   const handleBackToSessions = () => {
     setCurrentSession(null);
     clearFiles();
+    // Clear conversation state when going back to session list
+    setRawMessages([]);
+    setSubagentRawMessages(new Map());
+  };
+
+  // Handle session selection - navigates to session URL
+  // Files and conversation state are loaded automatically via effects
+  const handleSelectSession = async (session: SessionWithFiles) => {
+    // Clear previous conversation state before loading new session
+    setRawMessages([]);
+    setSubagentRawMessages(new Map());
+
+    // Select session (navigates to session URL, which triggers loading)
+    await selectSession(session);
   };
 
   // Render sessions list view
@@ -63,7 +79,7 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
           {sessions.map((session) => (
             <button
               key={session.id}
-              onClick={() => selectSession(session)}
+              onClick={() => handleSelectSession(session)}
               className="w-full text-left px-3 py-2.5 text-sm hover:bg-accent transition-colors group"
             >
               <div className="flex items-center gap-2.5">
@@ -72,8 +88,10 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
                   {session.session_name || session.title || 'Untitled'}
                 </span>
               </div>
-              <div className="text-xs text-muted-foreground mt-1 ml-[22px]">
-                {session.file_count} {session.file_count === 1 ? 'file' : 'files'}
+              <div className="flex items-center justify-between mt-1 ml-[22px]">
+                <span className="text-xs text-muted-foreground">
+                  {session.file_count} {session.file_count === 1 ? 'file' : 'files'}
+                </span>
               </div>
             </button>
           ))}
@@ -81,6 +99,10 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
       )}
     </>
   );
+
+  // Files hidden from the explorer (but still available for other uses)
+  const HIDDEN_FILES = ['.session-state.json'];
+  const visibleFiles = files.filter(f => !HIDDEN_FILES.includes(f.filePath));
 
   // Render files view (when a session is selected)
   const renderFilesView = () => (
@@ -109,13 +131,13 @@ export function FileExplorer({ onFileClick }: FileExplorerProps) {
             <LoaderIcon size={14} />
             <span>Loading files...</span>
           </div>
-        ) : files.length === 0 ? (
+        ) : visibleFiles.length === 0 ? (
           <div className="p-4 text-sm text-muted-foreground">
             No files in this session yet.
           </div>
         ) : (
           <div className="py-1">
-            {files.map((file) => (
+            {visibleFiles.map((file) => (
               <button
                 key={file.id}
                 onClick={() => onFileClick(file)}

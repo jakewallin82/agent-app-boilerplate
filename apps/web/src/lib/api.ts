@@ -26,6 +26,17 @@ export async function getSession(sessionId: string): Promise<SessionWithFiles> {
   return session;
 }
 
+export async function getSessionByName(sessionName: string): Promise<SessionWithFiles | null> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/sessions/by-name/${encodeURIComponent(sessionName)}`, { headers });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) throw new Error('Failed to fetch session');
+  const { session } = await res.json();
+  return session;
+}
+
 export interface StoredMessage {
   id: string;
   session_id: string;
@@ -113,6 +124,27 @@ export async function getSessionHistory(sessionId: string): Promise<unknown> {
     throw new Error('Failed to fetch session history');
   }
   return res.json();
+}
+
+// Session state from .session-state.json (own session or admin can view any)
+export interface SessionState {
+  messages: unknown[];
+  [key: string]: unknown;
+}
+
+export async function getSessionState(sessionId: string): Promise<SessionState | null> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/sessions/${sessionId}/state`, { headers });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      return null; // No session state file
+    }
+    throw new Error('Failed to fetch session state');
+  }
+
+  const data = await res.json();
+  return data.sessionState;
 }
 
 // Stream agent query with session name and optional SDK session ID for resuming

@@ -1,6 +1,7 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { SessionProvider } from '@/contexts/SessionContext';
 import { FileProvider } from '@/contexts/FileContext';
+import { DevModeProvider } from '@/contexts/DevModeContext';
 import { AuthPage } from '@/components/AuthPage';
 import { ChatInterface } from '@/components/ChatInterface';
 import { Layout } from '@/components/Layout';
@@ -29,10 +30,12 @@ export default function App() {
   }
 
   return (
-    <SessionProvider>
-      <FileProvider>
-        <AppContent />
-      </FileProvider>
-    </SessionProvider>
+    <DevModeProvider>
+      <SessionProvider>
+        <FileProvider>
+          <AppContent />
+        </FileProvider>
+      </SessionProvider>
+    </DevModeProvider>
   );
 }

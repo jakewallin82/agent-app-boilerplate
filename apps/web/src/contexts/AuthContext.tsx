@@ -3,8 +3,13 @@ import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { warmupAgent } from '@/lib/api';
 
+// Extended user type with admin status
+interface ExtendedUser extends User {
+  isAdmin?: boolean;
+}
+
 interface AuthContextType {
-  user: User | null;
+  user: ExtendedUser | null;
   session: Session | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
@@ -15,10 +20,11 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<ExtendedUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const hasWarmedUp = useRef(false);
+  const hasFetchedAdmin = useRef(false);
 
   // Trigger warmup for agents that support it
   const triggerWarmup = async () => {
@@ -52,15 +58,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           triggerWarmup();
         }
 
-        // Reset warmup flag on sign out
+        // Reset flags on sign out
         if (event === 'SIGNED_OUT') {
           hasWarmedUp.current = false;
+          hasFetchedAdmin.current = false;
         }
       }
     );
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Fetch admin status after auth session is established
+  useEffect(() => {
+    const fetchAdminStatus = async () => {
+      if (!session?.access_token || !user || hasFetchedAdmin.current) return;
+      hasFetchedAdmin.current = true;
+
+      try {
+        const response = await fetch('/api/agent/me', {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.user?.isAdmin !== undefined) {
+            setUser(prev => prev ? { ...prev, isAdmin: data.user.isAdmin } : prev);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch admin status:', error);
+      }
+    };
+
+    fetchAdminStatus();
+  }, [session?.access_token, user?.id]);
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });

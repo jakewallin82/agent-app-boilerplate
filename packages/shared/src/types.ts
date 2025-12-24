@@ -45,3 +45,21 @@ export interface AgentFile {
   file_size?: number;
   created_at: string;
 }
+
+// Session state for dev mode debugging
+export interface SessionState {
+  version: string;
+  sessionId: string;
+  sessionName: string;
+  agentId: string;
+  userId: string;
+  startTime: string;
+  endTime?: string;
+  messages: unknown[];  // Full SDK message stream (typed as unknown to avoid SDK dependency)
+  metadata: {
+    totalTokens: number;
+    totalCost: number;
+    toolCallCount: number;
+    subagentCount: number;
+  };
+}

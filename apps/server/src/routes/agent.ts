@@ -4,6 +4,7 @@ import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { writeFile } from 'fs/promises';
 import { supabase } from '../lib/supabase.js';
 import { authMiddleware } from '../middleware/auth.js';
 import {
@@ -15,6 +16,7 @@ import { getAgentConfig } from '../services/agentConfig.js';
 import { loadSharedFilesIntoSession, loadAgentConfigIntoSession } from '../services/sharedFiles.js';
 import { setWarmedSession, consumeWarmedSession, getWarmupCacheStats } from '../services/warmupCache.js';
 import { getAllowedTools, getSandboxSystemPrompt } from '../services/toolSandbox.js';
+import type { SessionState } from '@agent-app/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -139,6 +141,23 @@ ${content}`;
     let assistantContent = '';
     let sdkSessionId: string | undefined = existingSessionId;
 
+    // Initialize session state collector for dev mode debugging
+    const sessionState: SessionState = {
+      version: '1.0',
+      sessionId: '', // Will be set on init message
+      sessionName,
+      agentId,
+      userId: user.id,
+      startTime: new Date().toISOString(),
+      messages: [],
+      metadata: {
+        totalTokens: 0,
+        totalCost: 0,
+        toolCallCount: 0,
+        subagentCount: 0,
+      },
+    };
+
     try {
       const queryIterator = query({
         prompt: promptWithContext,
@@ -152,10 +171,32 @@ ${content}`;
       });
 
       for await (const message of queryIterator) {
+        // Collect ALL messages for session state
+        sessionState.messages.push(message);
+
         // Capture SDK session ID from init message
         if (message.type === 'system' && (message as any).subtype === 'init') {
           sdkSessionId = message.session_id;
+          sessionState.sessionId = sdkSessionId || '';
           console.log('[AGENT] SDK Session ID:', sdkSessionId);
+        }
+
+        // Count tool calls for metadata
+        if (message.type === 'assistant') {
+          const content = (message as any).message?.content;
+          if (Array.isArray(content)) {
+            const toolUses = content.filter((b: any) => b.type === 'tool_use');
+            sessionState.metadata.toolCallCount += toolUses.length;
+            sessionState.metadata.subagentCount += toolUses.filter(
+              (b: any) => b.name === 'Task'
+            ).length;
+          }
+        }
+
+        // Capture usage stats from result message
+        if (message.type === 'result' && (message as any).subtype === 'success') {
+          sessionState.metadata.totalTokens = (message as any).usage?.total_tokens || 0;
+          sessionState.metadata.totalCost = (message as any).cost_usd || 0;
         }
 
         // Accumulate assistant text content
@@ -216,6 +257,18 @@ ${content}`;
       }
 
       console.log('[AGENT] Flushed', persistedFiles.length, 'files');
+
+      // Write session state file for dev mode debugging
+      sessionState.endTime = new Date().toISOString();
+      try {
+        await writeFile(
+          path.join(sessionDir, '.session-state.json'),
+          JSON.stringify(sessionState, null, 2)
+        );
+        console.log('[AGENT] Session state saved:', path.join(sessionDir, '.session-state.json'));
+      } catch (stateError) {
+        console.error('[AGENT] Failed to save session state:', stateError);
+      }
 
       // Save messages
       if (sdkSessionId) {

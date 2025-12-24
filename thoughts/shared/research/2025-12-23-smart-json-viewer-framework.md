@@ -242,7 +242,7 @@ export interface AgentConfig {
 import React from 'react';
 
 /**
- * Props interface for all viewer components
+ * Props interface for all viewer components (Phase 1: Read-Only)
  */
 export interface ViewerProps<T = unknown> {
   /** Parsed JSON data */
@@ -254,13 +254,7 @@ export interface ViewerProps<T = unknown> {
   /** File metadata */
   file: AgentFile;
 
-  /** Callback when data is modified (for editable viewers) */
-  onChange?: (data: T) => void;
-
-  /** Whether the component is in edit mode */
-  isEditing?: boolean;
-
-  /** Sub-component renderer for nested content */
+  /** Sub-component renderer for nested content (e.g., file references) */
   renderSubComponent?: (path: string, content: string) => React.ReactNode;
 }
 
@@ -581,187 +575,13 @@ export function SmartJsonViewer({
 }
 ```
 
-#### 5. Editable Viewer Template
-
-**Create `apps/web/src/components/templates/EditableViewerTemplate.tsx`:**
-
-```typescript
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { useDebouncedCallback } from 'use-debounce';
-import type { ViewerProps } from '@/lib/viewerRegistry';
-
-interface EditableViewerTemplateProps<T> extends ViewerProps<T> {
-  /** Render the view mode */
-  renderView: (data: T) => React.ReactNode;
-
-  /** Render the edit mode */
-  renderEdit: (
-    data: T,
-    onChange: (data: T) => void
-  ) => React.ReactNode;
-
-  /** Validate data before save */
-  validate?: (data: T) => { valid: boolean; errors?: string[] };
-
-  /** Auto-save delay in ms (0 to disable) */
-  autoSaveDelay?: number;
-
-  /** Save handler */
-  onSave?: (data: T) => Promise<void>;
-}
-
-export function EditableViewerTemplate<T>({
-  data,
-  content,
-  file,
-  onChange,
-  isEditing: externalIsEditing,
-  renderView,
-  renderEdit,
-  validate,
-  autoSaveDelay = 1000,
-  onSave,
-}: EditableViewerTemplateProps<T>) {
-  const [isEditing, setIsEditing] = useState(externalIsEditing ?? false);
-  const [localData, setLocalData] = useState<T>(data);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
-
-  // Sync external data
-  useEffect(() => {
-    if (!isDirty) {
-      setLocalData(data);
-    }
-  }, [data, isDirty]);
-
-  // Auto-save with debounce
-  const debouncedSave = useDebouncedCallback(
-    async (dataToSave: T) => {
-      if (!onSave) return;
-
-      // Validate first
-      if (validate) {
-        const result = validate(dataToSave);
-        if (!result.valid) {
-          setSaveError(result.errors?.join(', ') ?? 'Validation failed');
-          return;
-        }
-      }
-
-      setIsSaving(true);
-      setSaveError(null);
-
-      try {
-        await onSave(dataToSave);
-        setIsDirty(false);
-      } catch (error) {
-        setSaveError(error instanceof Error ? error.message : 'Save failed');
-      } finally {
-        setIsSaving(false);
-      }
-    },
-    autoSaveDelay
-  );
-
-  // Handle local changes
-  const handleChange = useCallback(
-    (newData: T) => {
-      setLocalData(newData);
-      setIsDirty(true);
-      onChange?.(newData);
-
-      if (autoSaveDelay > 0) {
-        debouncedSave(newData);
-      }
-    },
-    [onChange, autoSaveDelay, debouncedSave]
-  );
-
-  // Manual save
-  const handleManualSave = useCallback(async () => {
-    if (!onSave) return;
-
-    if (validate) {
-      const result = validate(localData);
-      if (!result.valid) {
-        setSaveError(result.errors?.join(', ') ?? 'Validation failed');
-        return;
-      }
-    }
-
-    setIsSaving(true);
-    setSaveError(null);
-
-    try {
-      await onSave(localData);
-      setIsDirty(false);
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : 'Save failed');
-    } finally {
-      setIsSaving(false);
-    }
-  }, [localData, onSave, validate]);
-
-  return (
-    <div className="relative">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between mb-3 pb-2 border-b border-border">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsEditing(!isEditing)}
-            className={`px-2 py-1 text-xs rounded ${
-              isEditing
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-card hover:bg-accent'
-            }`}
-          >
-            {isEditing ? 'View' : 'Edit'}
-          </button>
-
-          {isDirty && (
-            <span className="text-xs text-yellow-500">Unsaved changes</span>
-          )}
-
-          {isSaving && (
-            <span className="text-xs text-muted-foreground">Saving...</span>
-          )}
-        </div>
-
-        {isEditing && onSave && (
-          <button
-            onClick={handleManualSave}
-            disabled={isSaving || !isDirty}
-            className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
-          >
-            Save
-          </button>
-        )}
-      </div>
-
-      {/* Error display */}
-      {saveError && (
-        <div className="mb-3 p-2 bg-red-500/10 border border-red-500/50 rounded text-sm text-red-400">
-          {saveError}
-        </div>
-      )}
-
-      {/* Content */}
-      {isEditing ? renderEdit(localData, handleChange) : renderView(localData)}
-    </div>
-  );
-}
-```
-
-#### 6. Example Custom Viewer: NFL Predictions
+#### 5. Example Custom Viewer: NFL Predictions (Read-Only)
 
 **Create `apps/web/src/components/viewers/PredictionViewer.tsx`:**
 
 ```typescript
 import React from 'react';
 import type { ViewerProps } from '@/lib/viewerRegistry';
-import { EditableViewerTemplate } from '../templates/EditableViewerTemplate';
-import { MarkdownViewer } from '../MarkdownViewer';
 
 /**
  * Schema for NFL predictions
@@ -782,15 +602,12 @@ interface GamePrediction {
 }
 
 /**
- * View mode renderer
+ * Read-only prediction viewer component
  */
-function PredictionViewMode({
+export function PredictionViewer({
   data,
-  renderSubComponent
-}: {
-  data: NFLPrediction;
-  renderSubComponent?: ViewerProps['renderSubComponent'];
-}) {
+  renderSubComponent,
+}: ViewerProps<NFLPrediction>) {
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -863,7 +680,7 @@ function PredictionViewMode({
         ))}
       </div>
 
-      {/* Summary (sub-component) */}
+      {/* Summary (sub-component via file reference) */}
       {data.summary && renderSubComponent && (
         <div className="mt-6 pt-4 border-t border-border">
           <h3 className="text-sm font-medium mb-2 text-muted-foreground">
@@ -875,130 +692,9 @@ function PredictionViewMode({
     </div>
   );
 }
-
-/**
- * Edit mode renderer
- */
-function PredictionEditMode({
-  data,
-  onChange,
-}: {
-  data: NFLPrediction;
-  onChange: (data: NFLPrediction) => void;
-}) {
-  const updateGame = (index: number, updates: Partial<GamePrediction>) => {
-    const newObjects = [...data.objects];
-    newObjects[index] = { ...newObjects[index], ...updates };
-    onChange({ ...data, objects: newObjects });
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* Title edit */}
-      <div>
-        <label className="block text-sm font-medium mb-1">Name</label>
-        <input
-          type="text"
-          value={data.name}
-          onChange={(e) => onChange({ ...data, name: e.target.value })}
-          className="w-full bg-input border border-border rounded px-3 py-2"
-        />
-      </div>
-
-      {/* Games edit */}
-      <div className="space-y-3">
-        {data.objects.map((game, index) => (
-          <div key={index} className="p-3 bg-card rounded-lg border border-border">
-            <div className="grid grid-cols-2 gap-3 mb-2">
-              <div>
-                <label className="text-xs text-muted-foreground">Away Team</label>
-                <input
-                  type="text"
-                  value={game.awayTeam}
-                  onChange={(e) => updateGame(index, { awayTeam: e.target.value })}
-                  className="w-full bg-input border border-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Home Team</label>
-                <input
-                  type="text"
-                  value={game.homeTeam}
-                  onChange={(e) => updateGame(index, { homeTeam: e.target.value })}
-                  className="w-full bg-input border border-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground">Spread</label>
-                <input
-                  type="number"
-                  step="0.5"
-                  value={game.spread}
-                  onChange={(e) => updateGame(index, { spread: parseFloat(e.target.value) })}
-                  className="w-full bg-input border border-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Prediction</label>
-                <select
-                  value={game.prediction}
-                  onChange={(e) => updateGame(index, { prediction: e.target.value as 'home' | 'away' | 'push' })}
-                  className="w-full bg-input border border-border rounded px-2 py-1 text-sm"
-                >
-                  <option value="home">Home</option>
-                  <option value="away">Away</option>
-                  <option value="push">Push</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Confidence</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={game.confidence}
-                  onChange={(e) => updateGame(index, { confidence: parseInt(e.target.value) })}
-                  className="w-full bg-input border border-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Main prediction viewer component
- */
-export function PredictionViewer(props: ViewerProps<NFLPrediction>) {
-  return (
-    <EditableViewerTemplate
-      {...props}
-      renderView={(data) => (
-        <PredictionViewMode
-          data={data}
-          renderSubComponent={props.renderSubComponent}
-        />
-      )}
-      renderEdit={(data, onChange) => (
-        <PredictionEditMode data={data} onChange={onChange} />
-      )}
-      validate={(data) => ({
-        valid: data.name.length > 0 && data.objects.length > 0,
-        errors: data.name.length === 0 ? ['Name is required'] : undefined,
-      })}
-      autoSaveDelay={1500}
-    />
-  );
-}
 ```
 
-#### 7. Component Registration and Initialization
+#### 6. Component Registration and Initialization
 
 **Create `apps/web/src/lib/registerViewers.ts`:**
 
@@ -1029,7 +725,7 @@ export function initializeViewerRegistry() {
 }
 ```
 
-#### 8. Hook for Agent Config Access
+#### 7. Hook for Agent Config Access
 
 **Create `apps/web/src/hooks/useAgentConfig.ts`:**
 
@@ -1297,33 +993,104 @@ export function {SchemaName}Viewer(props: ViewerProps<{SchemaName}>) {
 
 ## Implementation Roadmap
 
-### Phase 1: Core Framework (2-3 days)
-1. Add `viewMappings` types to `packages/shared/src/agentConfig.ts`
-2. Create `viewerRegistry.ts` and `schemaMatcher.ts`
-3. Create `SmartJsonViewer.tsx` component
-4. Add API endpoint for agent config exposure
-5. Update `FileViewerTabs.tsx` to use SmartJsonViewer
+### Phase 1: MVP - Read-Only Smart Viewers
 
-### Phase 2: Template System (1-2 days)
-1. Create `EditableViewerTemplate.tsx`
-2. Add auto-save hook with debounce
-3. Create file save API endpoint
-4. Add validation support
+**Scope**: Pre-built, read-only viewer components that match JSON against schemas and render custom UIs. All components must be coded and deployed with the app.
 
-### Phase 3: Example Viewers (1-2 days)
-1. Create `PredictionViewer.tsx` for NFL predictions
-2. Create `WeeklyScheduleViewer.tsx` for schedules
-3. Configure mappings in `sports-nfl` agent config
+**What's IN Phase 1:**
+- Schema files stored in `agent/schemas/*.schema.json`
+- Viewer mappings in agent config pointing to pre-built components
+- Component registry with lazy loading
+- Schema matching (file patterns + JSON Schema validation)
+- Sub-component rendering for nested content (e.g., markdown in JSON)
+- On-demand file reference fetching
+- Auto-discovery of schemas from `agent/schemas/` directory
 
-### Phase 4: Claude Skill (1 day)
+**What's NOT in Phase 1:**
+- Dynamic/declarative viewer generation
+- Editable viewers or edit mode
+- Auto-save functionality
+- Schema persistence in Supabase
+- Agent generating viewers mid-run
+
+#### Phase 1 Implementation Steps
+
+**Step 1: Types & Configuration (1 day)**
+1. Add `ViewMapping` and `ViewMappingsConfig` types to `packages/shared/src/agentConfig.ts`
+2. Create `agent/schemas/` directory structure
+3. Update `agents.json` with `viewMappings` pointing to schema files
+4. Add API endpoint `GET /api/agent/configs/:agentId` to expose config to frontend
+
+**Step 2: Schema Matching (1 day)**
+1. Create `apps/web/src/lib/schemaMatcher.ts` with:
+   - File pattern matching (fast path)
+   - JSON Schema validation via Ajv
+   - Priority-based resolution
+2. Create `apps/web/src/lib/viewerRegistry.ts` for component registration
+
+**Step 3: SmartJsonViewer Component (1 day)**
+1. Create `apps/web/src/components/SmartJsonViewer.tsx`
+2. Create `apps/web/src/hooks/useAgentConfig.ts` for config fetching
+3. Update `FileViewerTabs.tsx` to use SmartJsonViewer for JSON files
+4. Add sub-component rendering support with `renderSubComponent` callback
+
+**Step 4: File Reference Loading (0.5 day)**
+1. Create `apps/web/src/components/FileReferenceLoader.tsx`
+2. Resolve relative paths from parent file's directory
+3. Fetch content on-demand via existing file API
+4. Render with appropriate sub-component (MarkdownViewer, etc.)
+
+**Step 5: Example Viewers (1 day)**
+1. Create `apps/web/src/components/viewers/PredictionViewer.tsx`
+2. Create `apps/web/src/components/viewers/WeeklyScheduleViewer.tsx`
+3. Create corresponding schemas in `agent/schemas/`
+4. Register viewers in `apps/web/src/lib/registerViewers.ts`
+5. Configure mappings in `sports-nfl` agent config
+
+**Step 6: Polish & Testing (0.5 day)**
+1. Add loading states for schema matching
+2. Fallback to JsonViewer when no match
+3. Error handling for invalid schemas
+4. Test with various JSON structures
+
+**Total Phase 1: ~5 days**
+
+---
+
+### Phase 2: Editable Viewers (Future)
+
+**Scope**: Add edit mode for admin users with auto-save.
+
+1. Create `EditableViewerTemplate.tsx` with view/edit toggle
+2. Add auto-save with debounce (`use-debounce` library)
+3. Create file save API endpoint `POST /api/files/:fileId/save`
+4. Gate edit mode behind admin role check
+5. Add validation before save
+6. Update example viewers to support edit mode
+
+---
+
+### Phase 3: Dynamic Viewer Generation (Future)
+
+**Scope**: Allow agent to generate viewer specifications mid-run.
+
+1. Define declarative viewer specification format (`.viewer.json`)
+2. Create `ViewerInterpreter.tsx` to render declarative specs
+3. Build primitive component library:
+   - `table`, `cards`, `accordion`, `badge`, `header`, `row`, `text`
+4. Auto-discover viewer specs from `agent/viewers/` directory
+5. Agent can create schema + viewer spec + data in single run
+
+---
+
+### Phase 4: Claude Skill for Component Generation (Future)
+
+**Scope**: Claude skill to help developers create new viewer components.
+
 1. Create `.claude/skills/generate-viewer.md`
-2. Document template patterns
-3. Test generation workflow
-
-### Phase 5: Polish & Testing (1-2 days)
-1. Add loading states and error handling
-2. Test schema matching edge cases
-3. Document component creation process
+2. Document component patterns and templates
+3. Skill generates TypeScript code for new viewers
+4. Skill updates registry and config automatically
 
 ---
 
@@ -1340,20 +1107,164 @@ export function {SchemaName}Viewer(props: ViewerProps<{SchemaName}>) {
 
 ---
 
-## Open Questions
+## Phase 1 Happy Path Scenario
 
-1. **Schema Storage**: Should schemas be stored inline in `agents.json` or as separate `.schema.json` files referenced by path?
+**Context**: NFL agent outputs predictions, frontend renders with custom viewer.
 
-2. **Component Discovery**: Should the frontend auto-discover available viewers, or require explicit registration?
+### Setup (Before Runtime)
 
-3. **Edit Permissions**: Should edit mode be gated by user role (admin only) or available to all users?
+```
+agent/
+├── schemas/
+│   └── nfl-predictions.schema.json    # JSON Schema for predictions
+│
+└── configs/
+    └── sports-nfl/
+        └── CLAUDE.md
 
-4. **File Reference Resolution**: For sub-components referencing external files (e.g., `summary: "./summary.md"`), should we:
-   - Fetch the file on-demand when the viewer renders?
-   - Pre-fetch and include content in the initial file event?
-   - Show a link to open the file in a new tab?
+apps/server/src/config/agents.json     # viewMappings config
+apps/web/src/components/viewers/
+    └── PredictionViewer.tsx           # Pre-built React component
+apps/web/src/lib/registerViewers.ts    # Component registration
+```
 
-5. **Schema Versioning**: How to handle schema evolution when agent output format changes?
+### Runtime Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ User: "Generate predictions for Week 15"                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Agent writes: predictions/week-15.json                          │
+│ {                                                               │
+│   "name": "Week 15 Predictions",                                │
+│   "objects": [                                                  │
+│     { "homeTeam": "Bills", "awayTeam": "Chiefs",                │
+│       "spread": -2.5, "prediction": "home", "confidence": 78 }  │
+│   ],                                                            │
+│   "summary": "./week-15-summary.md"                             │
+│ }                                                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Agent writes: predictions/week-15-summary.md                    │
+│ # Week 15 Analysis                                              │
+│ Home teams favored in cold weather...                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Server: SSE file_events sent to frontend                        │
+│ - predictions/week-15.json (created)                            │
+│ - predictions/week-15-summary.md (created)                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ User clicks: predictions/week-15.json in FileExplorer           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ FileViewerTabs detects JSON, delegates to SmartJsonViewer       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SmartJsonViewer:                                                │
+│ 1. Parse JSON content                                           │
+│ 2. Load agent config (sports-nfl) with viewMappings             │
+│ 3. Check file pattern: "predictions/**/*.json" ✓ MATCH          │
+│ 4. OR validate against nfl-predictions.schema.json ✓ MATCH      │
+│ 5. Lookup component: "PredictionViewer" from registry           │
+│ 6. Render PredictionViewer with parsed data                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ PredictionViewer renders:                                       │
+│ - Detects data.summary = "./week-15-summary.md"                 │
+│ - Calls renderSubComponent('$.summary', './week-15-summary.md') │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ FileReferenceLoader:                                            │
+│ 1. Resolve relative path from predictions/ directory            │
+│    → predictions/week-15-summary.md                             │
+│ 2. Fetch file content via signed URL                            │
+│ 3. Render MarkdownViewer with fetched content                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Final rendered output:                                          │
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │ Week 15 Predictions                          1 prediction   │ │
+│ │                                                             │ │
+│ │ ┌─────────────────────────────────────────────────────────┐ │ │
+│ │ │ Chiefs @ Bills                     Spread: -2.5         │ │ │
+│ │ │ [BILLS]                            ████████░░ 78%       │ │ │
+│ │ └─────────────────────────────────────────────────────────┘ │ │
+│ │                                                             │ │
+│ │ ── Summary ──────────────────────────────────────────────── │ │
+│ │ # Week 15 Analysis                                          │ │
+│ │ Home teams favored in cold weather...                       │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### No Viewer Match → Fallback to JsonViewer
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Agent writes: research/random-analysis.json                     │
+│ { "topic": "Weather impact", "findings": [...] }                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SmartJsonViewer:                                                │
+│ 1. Parse JSON                                                   │
+│ 2. Check file patterns: no match                                │
+│ 3. Validate against all schemas: no match                       │
+│ 4. Use defaultComponent: "JsonViewer"                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ JsonViewer renders with syntax highlighting (existing behavior) │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Resolved Questions
+
+1. **Schema Storage**: Store schemas in `agent/schemas/*.schema.json` files, agent config references by path.
+
+2. **Component Discovery**: Auto-discovery from `agent/schemas/` directory.
+
+3. **Edit Permissions**: Admin-only (Phase 2 feature).
+
+4. **File Reference Resolution**: Fetch on-demand when viewer renders.
+
+5. **Schema Versioning**: Not addressing in Phase 1.
+
+## Remaining Open Questions
+
+1. **Schema-to-Viewer Mapping**: How should schemas associate with viewer components?
+   - Option A: Naming convention (`nfl-predictions.schema.json` → `PredictionViewer`)
+   - Option B: Explicit mapping in agent config `viewMappings`
+   - Option C: Schema file includes `$viewer` field pointing to component
+
+2. **Fallback Behavior**: When schema matches but no viewer component exists, should we:
+   - Show raw JSON with JsonViewer?
+   - Show error message?
+   - Show schema-aware generic viewer (auto-table for arrays, etc.)?
 
 ---
 

@@ -282,11 +282,11 @@ export async function flushSessionFolder(
     return [];
   }
 
-  // Find all files in session directory
+  // Find all files in session directory (including .session-state.json)
   const files = await glob('**/*', {
     cwd: sessionDir,
     nodir: true,
-    dot: false, // Skip hidden files
+    dot: true, // Include dotfiles to capture .session-state.json
   });
 
   console.log(`[FILES] Flushing ${files.length} files from ${sessionDir} (shared: ${isShared})`);
@@ -294,18 +294,25 @@ export async function flushSessionFolder(
   const persistedFiles: FileInfo[] = [];
 
   for (const relativePath of files) {
+    // Special handling for session state file - always persist to user storage
+    const isSessionState = relativePath === '.session-state.json';
+
     // Skip agent config files (CLAUDE.md, .claude/) - these are never persisted
-    if (isAgentConfigFile(relativePath)) {
+    if (!isSessionState && isAgentConfigFile(relativePath)) {
       console.log('[FILES] Skipping agent config file:', relativePath);
       continue;
     }
 
     // Skip shared files when writing to user storage (they already exist in shared storage)
     // But DO persist them when writing to shared storage (admin agent)
-    if (!isShared && isSharedFile(relativePath)) {
+    // Session state file is always persisted to user storage
+    if (!isSessionState && !isShared && isSharedFile(relativePath)) {
       console.log('[FILES] Skipping shared file (already in shared storage):', relativePath);
       continue;
     }
+
+    // For session state, always persist to user storage (not shared)
+    const persistToShared = isSessionState ? false : isShared;
 
     const localPath = path.join(sessionDir, relativePath);
 
@@ -324,8 +331,8 @@ export async function flushSessionFolder(
 
       console.log('[FILES] Persisting file:', relativePath, existingHash ? '(modified)' : '(new)');
 
-      // Persist the file
-      const fileInfo = await persistFile(userId, sessionId, sessionName, agentId, localPath, isShared);
+      // Persist the file (use persistToShared for session state special handling)
+      const fileInfo = await persistFile(userId, sessionId, sessionName, agentId, localPath, persistToShared);
       if (fileInfo) {
         persistedFiles.push(fileInfo);
       }

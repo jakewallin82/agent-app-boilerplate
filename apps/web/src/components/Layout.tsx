@@ -1,8 +1,9 @@
 import { useState, type ReactNode, type MouseEvent } from 'react';
 import { FileExplorer } from './FileExplorer';
-import { FileViewerTabs } from './FileViewerTabs';
+import { RightPanel } from './RightPanel';
 import { useFiles } from '@/contexts/FileContext';
 import { useSessions } from '@/contexts/SessionContext';
+import { useDevMode } from '@/contexts/DevModeContext';
 import type { AgentFile } from '@/types';
 
 interface LayoutProps {
@@ -13,14 +14,16 @@ export function Layout({ children }: LayoutProps) {
   const { openFile, openTabs } = useFiles();
   const { currentSession } = useSessions();
   const { files } = useFiles();
+  const { isDevMode, subagentTabs, openSubagentTab, closeSubagentTab } = useDevMode();
 
   const [leftPanelWidth, setLeftPanelWidth] = useState(240);
   const [rightPanelWidth, setRightPanelWidth] = useState(400);
 
   // Show right panel if:
   // 1. There are open tabs, OR
-  // 2. An old session with files is selected (so user can click to open them)
-  const showRightPanel = openTabs.length > 0 || (currentSession && files.length > 0);
+  // 2. An old session with files is selected, OR
+  // 3. Dev mode with subagent tabs open
+  const showRightPanel = openTabs.length > 0 || (currentSession && files.length > 0) || (isDevMode && subagentTabs.length > 0);
 
   const handleFileClick = async (file: AgentFile) => {
     await openFile(file);
@@ -93,13 +96,17 @@ export function Layout({ children }: LayoutProps) {
         />
       )}
 
-      {/* Right Panel - File Viewer */}
+      {/* Right Panel - Files and Subagent Tabs */}
       {showRightPanel && (
         <div
           className="flex-shrink-0 h-full border-l border-border"
           style={{ width: rightPanelWidth }}
         >
-          <FileViewerTabs />
+          <RightPanel
+            subagentTabs={subagentTabs}
+            onCloseSubagentTab={closeSubagentTab}
+            onSubagentClick={openSubagentTab}
+          />
         </div>
       )}
     </div>

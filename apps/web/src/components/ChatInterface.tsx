@@ -2,9 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessions } from '@/contexts/SessionContext';
 import { useFiles } from '@/contexts/FileContext';
+import { useDevMode } from '@/contexts/DevModeContext';
 import { streamAgentQuery, getSessionMessages } from '@/lib/api';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { DevModeMessageList } from './DevModeMessageList';
 import type {
   ChatMessage,
   Subagent,
@@ -56,6 +58,7 @@ export function ChatInterface() {
   const { user, signOut } = useAuth();
   const { currentSession, setCurrentSession, updateCurrentSession, loadSessions } = useSessions();
   const { addOrUpdateFile, clearFiles } = useFiles();
+  const { isDevMode, setDevMode, isAdmin, openSubagentTab } = useDevMode();
 
   // Session creation form state (shown when no session)
   const [sessionNameInput, setSessionNameInput] = useState('');
@@ -66,6 +69,9 @@ export function ChatInterface() {
   const [messagesMap, setMessagesMap] = useState<Map<string, ChatMessage>>(new Map());
   const [subagentsMap, setSubagentsMap] = useState<Map<string, Subagent>>(new Map());
   const [addedSubagentIds, setAddedSubagentIds] = useState<Set<string>>(new Set());
+
+  // Dev mode: use context for raw SDK messages (shared with Layout for right panel)
+  const { rawMessages, setRawMessages, subagentRawMessages, setSubagentRawMessages } = useDevMode();
 
   const [isStreaming, setIsStreaming] = useState(false);
   const isSendingRef = useRef(false);
@@ -166,6 +172,8 @@ export function ChatInterface() {
     setMessagesMap(new Map());
     setSubagentsMap(new Map());
     setAddedSubagentIds(new Set());
+    setRawMessages([]);
+    setSubagentRawMessages(new Map());
     clearFiles();
 
     // Set temporary session BEFORE sending - this ensures UI shows chat view
@@ -229,6 +237,24 @@ export function ChatInterface() {
 
     try {
       for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId)) {
+        // Always collect raw messages (for dev mode display, even if currently in user mode)
+        // This ensures toggling modes doesn't lose message history
+        {
+          const parentToolUseId = (message as any).parent_tool_use_id;
+          if (parentToolUseId) {
+            // Subagent message
+            setSubagentRawMessages(prev => {
+              const updated = new Map(prev);
+              const existing = updated.get(parentToolUseId) || [];
+              updated.set(parentToolUseId, [...existing, message]);
+              return updated;
+            });
+          } else {
+            // Main agent message
+            setRawMessages(prev => [...prev, message]);
+          }
+        }
+
         const parentToolUseId = (message as any).parent_tool_use_id;
 
         // Capture SDK session ID from init message
@@ -416,6 +442,8 @@ export function ChatInterface() {
     setMessagesMap(new Map());
     setSubagentsMap(new Map());
     setAddedSubagentIds(new Set());
+    setRawMessages([]);
+    setSubagentRawMessages(new Map());
     setSessionNameInput('');
     setInitialMessageInput('');
   };
@@ -482,11 +510,18 @@ export function ChatInterface() {
     <>
       {/* Messages */}
       <main className="flex-1 overflow-y-auto p-4">
-        <MessageList
-          timeline={timeline}
-          messagesMap={messagesMap}
-          subagentsMap={subagentsMap}
-        />
+        {isDevMode ? (
+          <DevModeMessageList
+            messages={rawMessages}
+            onSubagentClick={openSubagentTab}
+          />
+        ) : (
+          <MessageList
+            timeline={timeline}
+            messagesMap={messagesMap}
+            subagentsMap={subagentsMap}
+          />
+        )}
         <div ref={messagesEndRef} />
       </main>
 
@@ -503,6 +538,19 @@ export function ChatInterface() {
       <header className="flex items-center justify-between border-b border-border px-4 py-3 flex-shrink-0">
         <h1 className="text-lg font-semibold">Agent Chat</h1>
         <div className="flex items-center gap-4">
+          {/* Dev Mode Toggle - Admin Only */}
+          {isAdmin && (
+            <button
+              onClick={() => setDevMode(!isDevMode)}
+              className={`text-xs px-2 py-1 rounded ${
+                isDevMode
+                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50'
+                  : 'bg-card text-muted-foreground border border-border'
+              }`}
+            >
+              {isDevMode ? 'Dev Mode' : 'User Mode'}
+            </button>
+          )}
           {currentSession && (
             <span className="text-xs text-muted-foreground font-mono">
               Session: {currentSession.session_name}

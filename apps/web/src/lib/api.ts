@@ -94,6 +94,27 @@ export async function warmupAgent(agentId: string = 'default'): Promise<{ status
   }
 }
 
+// Admin: Get all sessions
+export async function getAdminSessions(): Promise<unknown[]> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/sessions/admin/all', { headers });
+  if (!res.ok) {
+    throw new Error('Failed to fetch admin sessions');
+  }
+  const { sessions } = await res.json();
+  return sessions;
+}
+
+// Admin: Get session history
+export async function getSessionHistory(sessionId: string): Promise<unknown> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`/api/sessions/admin/${sessionId}/history`, { headers });
+  if (!res.ok) {
+    throw new Error('Failed to fetch session history');
+  }
+  return res.json();
+}
+
 // Stream agent query with session name and optional SDK session ID for resuming
 export async function* streamAgentQuery(
   content: string,

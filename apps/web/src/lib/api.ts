@@ -147,6 +147,61 @@ export async function getSessionState(sessionId: string): Promise<SessionState |
   return data.sessionState;
 }
 
+/**
+ * Reconnect to an active session stream after page refresh.
+ * Returns buffered messages first, then continues streaming live.
+ */
+export async function* reconnectToSession(sessionId: string): AsyncGenerator<any> {
+  const headers = await getAuthHeaders();
+
+  const res = await fetch(`/api/agent/stream/${sessionId}`, {
+    headers: {
+      ...headers,
+      'Accept': 'text/event-stream',
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      // No active stream - server finished before we could reconnect
+      console.log('[RECONNECT] No active stream, session may have completed');
+      return;
+    }
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `HTTP ${res.status}`);
+  }
+
+  // Same SSE parsing logic as streamAgentQuery
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+
+  if (!reader) throw new Error('No response body');
+
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') return;
+
+        try {
+          yield JSON.parse(data);
+        } catch (e) {
+          console.error('Failed to parse SSE:', e);
+        }
+      }
+    }
+  }
+}
+
 // Stream agent query with session name and optional SDK session ID for resuming
 export async function* streamAgentQuery(
   content: string,

@@ -65,7 +65,7 @@ export function ChatInterface() {
     isDevMode, setDevMode, isAdmin, openSubagentTab,
     rawMessages, setRawMessages, subagentRawMessages, setSubagentRawMessages,
     persistCurrentSession, loadSessionFromStorage, setCurrentSessionId,
-    markCurrentSessionComplete, isWaitingForServerCompletion, stopPolling
+    markCurrentSessionComplete, isReconnecting, stopReconnection
   } = useDevMode();
 
   // Session creation form state (shown when no session)
@@ -249,8 +249,8 @@ export function ChatInterface() {
     if (isSendingRef.current || !sessionName) return;
     isSendingRef.current = true;
 
-    // Stop any recovery polling - user is actively sending messages
-    stopPolling();
+    // Stop any active reconnection - user is sending new message
+    stopReconnection();
 
     console.log('[SEND] Sending message with session:', sessionName, 'sdkSessionId:', existingSdkSessionId || 'new');
 
@@ -494,7 +494,7 @@ export function ChatInterface() {
 
   // Handle "New Chat" button - clears current session to show create form
   const handleNewChat = () => {
-    stopPolling(); // Stop any recovery polling
+    stopReconnection(); // Stop any active reconnection
     setCurrentSession(null);
     clearFiles();
     setTimeline([]);
@@ -572,12 +572,12 @@ export function ChatInterface() {
   // Render the chat view (when session exists)
   const renderChatView = () => (
     <>
-      {/* Recovery Banner - shown when we detected an interrupted session */}
-      {isWaitingForServerCompletion && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/30 px-4 py-2 flex items-center gap-2">
-          <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
-          <span className="text-yellow-400 text-sm">
-            Session was interrupted. Waiting for server to complete...
+      {/* Recovery Banner - shown when reconnecting to server stream */}
+      {isReconnecting && (
+        <div className="bg-blue-500/10 border-b border-blue-500/30 px-4 py-2 flex items-center gap-2">
+          <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+          <span className="text-blue-400 text-sm">
+            Reconnecting to server stream...
           </span>
         </div>
       )}

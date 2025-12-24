@@ -5,9 +5,8 @@ import {
   loadSessionStateFromLocal,
   cleanupOldSessionStates,
   markSessionComplete,
-  wasSessionStreaming,
 } from '@/lib/sessionStorage';
-import { getSessionState } from '@/lib/api';
+import { getSessionState, reconnectToSession } from '@/lib/api';
 
 interface SubagentTab {
   id: string;
@@ -36,10 +35,9 @@ interface DevModeContextType {
   setCurrentSessionId: (sessionId: string | null) => void;
   persistCurrentSession: (isStreaming?: boolean) => void;
   markCurrentSessionComplete: () => void;
-  // Recovery state - true when we detected an interrupted session and are polling for completion
-  isWaitingForServerCompletion: boolean;
-  startPollingForCompletion: (sessionId: string) => void;
-  stopPolling: () => void;
+  // Recovery state - true when reconnecting to server stream
+  isReconnecting: boolean;
+  stopReconnection: () => void;
 }
 
 const DevModeContext = createContext<DevModeContextType | undefined>(undefined);
@@ -65,10 +63,9 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
   // Current session ID for persistence
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
-  // Recovery polling state
-  const [isWaitingForServerCompletion, setIsWaitingForServerCompletion] = useState(false);
-  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollingSessionIdRef = useRef<string | null>(null);
+  // Reconnection state
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const reconnectAbortRef = useRef<AbortController | null>(null);
 
   const openSubagentTab = (toolUseId: string, description: string) => {
     // Check if tab already exists
@@ -99,88 +96,104 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
     markSessionComplete(currentSessionId);
   }, [currentSessionId]);
 
-  // Stop any active polling
-  const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+  // Stop reconnection (called when user sends new message)
+  const stopReconnection = useCallback(() => {
+    if (reconnectAbortRef.current) {
+      reconnectAbortRef.current.abort();
+      reconnectAbortRef.current = null;
     }
-    pollingSessionIdRef.current = null;
-    setIsWaitingForServerCompletion(false);
+    setIsReconnecting(false);
   }, []);
 
-  // Start polling Supabase for completed session state
-  const startPollingForCompletion = useCallback((sessionId: string) => {
-    // Don't start if already polling
-    if (pollingIntervalRef.current) {
-      return;
-    }
+  // Reconnect to an active server stream
+  const reconnectToActiveSession = useCallback(async (sessionId: string) => {
+    if (isReconnecting) return;
 
-    console.log('[RECOVERY] Starting to poll for session completion:', sessionId);
-    setIsWaitingForServerCompletion(true);
-    pollingSessionIdRef.current = sessionId;
+    console.log('[RECONNECT] Attempting to reconnect to session:', sessionId);
+    setIsReconnecting(true);
 
-    const poll = async () => {
-      if (pollingSessionIdRef.current !== sessionId) {
-        // Session changed, stop polling
-        stopPolling();
-        return;
+    // Create abort controller for cleanup
+    reconnectAbortRef.current = new AbortController();
+
+    try {
+      let isFirstMessage = true;
+
+      for await (const message of reconnectToSession(sessionId)) {
+        // Check if we should stop (user sent new message, etc.)
+        if (reconnectAbortRef.current?.signal.aborted) {
+          console.log('[RECONNECT] Reconnection aborted');
+          break;
+        }
+
+        // Handle sync signal - catch-up complete, hide banner
+        const msgType = (message as { type?: string; subtype?: string }).type;
+        const msgSubtype = (message as { type?: string; subtype?: string }).subtype;
+        if (msgType === 'system' && msgSubtype === 'reconnect_synced') {
+          console.log('[RECONNECT] Catch-up complete, now receiving live updates');
+          setIsReconnecting(false);
+          continue; // Don't add this to rawMessages
+        }
+
+        // On first real message, clear existing state (server has complete history)
+        if (isFirstMessage) {
+          console.log('[RECONNECT] Received first message, clearing localStorage state');
+          setRawMessages([]);
+          setSubagentRawMessages(new Map());
+          isFirstMessage = false;
+        }
+
+        // Process message same as in ChatInterface
+        const parentToolUseId = (message as { parent_tool_use_id?: string }).parent_tool_use_id;
+        if (parentToolUseId) {
+          setSubagentRawMessages(prev => {
+            const updated = new Map(prev);
+            const existing = updated.get(parentToolUseId) || [];
+            updated.set(parentToolUseId, [...existing, message]);
+            return updated;
+          });
+        } else {
+          setRawMessages(prev => [...prev, message]);
+        }
       }
 
+      // Reconnection complete, mark session as complete
+      markSessionComplete(sessionId);
+      console.log('[RECONNECT] Reconnection completed successfully');
+    } catch (error) {
+      console.error('[RECONNECT] Reconnection failed:', error);
+      // Fall back to trying Supabase
       try {
         const sessionState = await getSessionState(sessionId);
         if (sessionState) {
-          console.log('[RECOVERY] Found completed session in Supabase');
-          const localState = loadSessionStateFromLocal(sessionId);
-          const supabaseTimestamp = sessionState.endTime
-            ? new Date(sessionState.endTime as string).getTime()
-            : Date.now();
-          const localTimestamp = localState?.lastUpdated || 0;
+          console.log('[RECONNECT] Falling back to Supabase state');
+          const mainMessages: unknown[] = [];
+          const subagentMessages = new Map<string, unknown[]>();
 
-          // Use Supabase state if it's newer (completed)
-          if (supabaseTimestamp > localTimestamp || sessionState.endTime) {
-            console.log('[RECOVERY] Supabase state is newer, loading it');
-            const mainMessages: unknown[] = [];
-            const subagentMessages = new Map<string, unknown[]>();
-
-            for (const msg of sessionState.messages) {
-              const parentId = (msg as { parent_tool_use_id?: string }).parent_tool_use_id;
-              if (parentId) {
-                const existing = subagentMessages.get(parentId) || [];
-                subagentMessages.set(parentId, [...existing, msg]);
-              } else {
-                mainMessages.push(msg);
-              }
+          for (const msg of sessionState.messages) {
+            const parentId = (msg as { parent_tool_use_id?: string }).parent_tool_use_id;
+            if (parentId) {
+              const existing = subagentMessages.get(parentId) || [];
+              subagentMessages.set(parentId, [...existing, msg]);
+            } else {
+              mainMessages.push(msg);
             }
-
-            setRawMessages(mainMessages);
-            setSubagentRawMessages(subagentMessages);
-            // Mark as complete now that we have the final state
-            markSessionComplete(sessionId);
           }
-          stopPolling();
+
+          setRawMessages(mainMessages);
+          setSubagentRawMessages(subagentMessages);
+          markSessionComplete(sessionId);
         }
-      } catch (error) {
-        // Still waiting, continue polling
-        console.log('[RECOVERY] Session not yet complete, continuing to poll...');
+      } catch (supabaseError) {
+        console.error('[RECONNECT] Supabase fallback also failed:', supabaseError);
       }
-    };
-
-    // Poll immediately, then every 3 seconds
-    poll();
-    pollingIntervalRef.current = setInterval(poll, 3000);
-
-    // Stop polling after 2 minutes max (server should be done by then)
-    setTimeout(() => {
-      if (pollingSessionIdRef.current === sessionId) {
-        console.log('[RECOVERY] Polling timeout, stopping');
-        stopPolling();
-      }
-    }, 120000);
-  }, [stopPolling]);
+    } finally {
+      setIsReconnecting(false);
+      reconnectAbortRef.current = null;
+    }
+  }, [isReconnecting]);
 
   // Load session state with fallback chain: localStorage -> Supabase -> false
-  // Also detects interrupted sessions and starts polling for completion
+  // Also detects interrupted sessions and attempts reconnection
   const loadSessionFromStorage = useCallback(async (sessionId: string): Promise<boolean> => {
     // 1. Try localStorage first (for mid-run refresh recovery)
     const localState = loadSessionStateFromLocal(sessionId);
@@ -190,10 +203,11 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
       setSubagentRawMessages(new Map(Object.entries(localState.subagentRawMessages)));
       setCurrentSessionId(sessionId);
 
-      // If session was streaming when we left, start polling for completion
+      // If session was streaming when we left, try to reconnect
       if (localState.isStreaming) {
-        console.log('[RECOVERY] Detected interrupted streaming session, starting to poll');
-        startPollingForCompletion(sessionId);
+        console.log('[RECOVERY] Detected interrupted streaming session, attempting reconnection');
+        // Don't await - let it run in background
+        reconnectToActiveSession(sessionId);
       }
 
       return true;
@@ -228,7 +242,7 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
 
     // 3. Neither found
     return false;
-  }, [startPollingForCompletion]);
+  }, [reconnectToActiveSession]);
 
 
   // Persist to localStorage on changes
@@ -248,11 +262,11 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
     cleanupOldSessionStates(10); // Keep 10 most recent
   }, []);
 
-  // Cleanup polling on unmount
+  // Cleanup reconnection on unmount
   useEffect(() => {
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
+      if (reconnectAbortRef.current) {
+        reconnectAbortRef.current.abort();
       }
     };
   }, []);
@@ -282,9 +296,8 @@ export function DevModeProvider({ children }: { children: ReactNode }) {
       persistCurrentSession,
       markCurrentSessionComplete,
       // Recovery state
-      isWaitingForServerCompletion,
-      startPollingForCompletion,
-      stopPolling,
+      isReconnecting,
+      stopReconnection,
     }}>
       {children}
     </DevModeContext.Provider>

@@ -16,6 +16,15 @@ import { getAgentConfig } from '../services/agentConfig.js';
 import { loadSharedFilesIntoSession, loadAgentConfigIntoSession } from '../services/sharedFiles.js';
 import { setWarmedSession, consumeWarmedSession, getWarmupCacheStats } from '../services/warmupCache.js';
 import { getAllowedTools, getSandboxSystemPrompt } from '../services/toolSandbox.js';
+import {
+  createSessionStream,
+  publishMessage,
+  markStreamComplete,
+  getSessionStream,
+  isStreamOwner,
+  subscribeToSession,
+  isStreamComplete,
+} from '../services/sessionStreams.js';
 import type { SessionState } from '@agent-app/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -191,11 +200,23 @@ ${content}`;
         // Collect ALL messages for session state
         sessionState.messages.push(message);
 
+        // Publish to session stream (for reconnecting clients)
+        if (sdkSessionId) {
+          await publishMessage(sdkSessionId, message);
+        }
+
         // Capture SDK session ID from init message
         if (message.type === 'system' && (message as any).subtype === 'init') {
           sdkSessionId = message.session_id;
           sessionState.sessionId = sdkSessionId || '';
           console.log('[AGENT] SDK Session ID:', sdkSessionId);
+
+          // Create session stream for reconnection support
+          if (sdkSessionId) {
+            createSessionStream(sdkSessionId, user.id);
+            // Publish the initial user message that was already emitted
+            await publishMessage(sdkSessionId, initialUserMessage);
+          }
 
           // Create session record IMMEDIATELY so frontend can navigate to /sessionName
           if (sdkSessionId) {
@@ -251,6 +272,11 @@ ${content}`;
         });
       }
 
+      // Mark stream as complete (after loop, before file persistence)
+      if (sdkSessionId) {
+        markStreamComplete(sdkSessionId);
+      }
+
       // Update session timestamp (session was already created on init message)
       if (sdkSessionId) {
         await supabase
@@ -284,13 +310,18 @@ ${content}`;
 
       // Emit file events for each persisted file
       for (const fileInfo of persistedFiles) {
+        const fileEvent = {
+          type: 'file_event',
+          subtype: 'created',
+          file: fileInfo,
+        };
         await stream.writeSSE({
-          data: JSON.stringify({
-            type: 'file_event',
-            subtype: 'created',
-            file: fileInfo,
-          }),
+          data: JSON.stringify(fileEvent),
         });
+        // Also publish to session stream
+        if (sdkSessionId) {
+          await publishMessage(sdkSessionId, fileEvent);
+        }
       }
 
       console.log('[AGENT] Flushed', persistedFiles.length, 'files');
@@ -385,4 +416,103 @@ agentRouter.post('/warmup', async (c) => {
 agentRouter.get('/warmup/stats', async (c) => {
   const stats = getWarmupCacheStats();
   return c.json(stats);
+});
+
+/**
+ * GET /stream/:sessionId - Reconnect to an active session stream
+ *
+ * Flow:
+ * 1. Check if session stream exists and user owns it
+ * 2. Send all buffered messages immediately (catch up)
+ * 3. If stream is complete, send [DONE]
+ * 4. If stream is active, subscribe for new messages
+ * 5. When stream completes or client disconnects, cleanup
+ */
+agentRouter.get('/stream/:sessionId', async (c) => {
+  const user = c.get('user');
+  const sessionId = c.req.param('sessionId');
+
+  console.log('[RECONNECT] Reconnect request for session:', sessionId, 'user:', user.id);
+
+  // Check if session stream exists
+  const sessionStream = getSessionStream(sessionId);
+  if (!sessionStream) {
+    console.log('[RECONNECT] No active stream found for session:', sessionId);
+    return c.json({ error: 'No active stream for this session' }, 404);
+  }
+
+  // Check authorization - user must own the stream
+  if (!isStreamOwner(sessionId, user.id)) {
+    console.log('[RECONNECT] User does not own stream:', sessionId);
+    return c.json({ error: 'Not authorized' }, 403);
+  }
+
+  return streamSSE(c, async (stream) => {
+    console.log('[RECONNECT] Starting SSE stream for session:', sessionId);
+
+    // Subscribe to get buffered messages and live updates
+    const subscription = subscribeToSession(sessionId, async (message) => {
+      // This callback is called for NEW messages (after subscription)
+      await stream.writeSSE({ data: JSON.stringify(message) });
+    });
+
+    if (!subscription) {
+      // Stream was deleted between check and subscribe (race condition)
+      await stream.writeSSE({ data: '[DONE]' });
+      return;
+    }
+
+    const { bufferedMessages, unsubscribe } = subscription;
+
+    try {
+      // Send all buffered messages first (catch up)
+      console.log('[RECONNECT] Sending', bufferedMessages.length, 'buffered messages');
+      for (const message of bufferedMessages) {
+        await stream.writeSSE({ data: JSON.stringify(message) });
+      }
+
+      // Signal that catch-up is complete - client can hide "Reconnecting" banner
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'system',
+          subtype: 'reconnect_synced',
+          buffered_count: bufferedMessages.length,
+        }),
+      });
+
+      // If stream is already complete, we're done
+      if (isStreamComplete(sessionId)) {
+        console.log('[RECONNECT] Stream already complete, sending DONE');
+        await stream.writeSSE({ data: '[DONE]' });
+        unsubscribe();
+        return;
+      }
+
+      // Wait for stream to complete (new messages delivered via subscriber callback)
+      await new Promise<void>((resolve) => {
+        // Check periodically if stream completed
+        const checkInterval = setInterval(() => {
+          if (isStreamComplete(sessionId)) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 100);
+
+        // Handle client disconnect
+        c.req.raw.signal.addEventListener('abort', () => {
+          console.log('[RECONNECT] Client disconnected for session:', sessionId);
+          clearInterval(checkInterval);
+          resolve();
+        });
+      });
+
+      // Stream completed, send final DONE
+      if (!c.req.raw.signal.aborted) {
+        await stream.writeSSE({ data: '[DONE]' });
+      }
+    } finally {
+      unsubscribe();
+      console.log('[RECONNECT] SSE stream ended for session:', sessionId);
+    }
+  });
 });

@@ -206,7 +206,8 @@ export async function* reconnectToSession(sessionId: string): AsyncGenerator<any
 export async function* streamAgentQuery(
   content: string,
   sessionName: string,
-  sdkSessionId?: string
+  sdkSessionId?: string,
+  agentId?: string
 ): AsyncGenerator<any> {
   const headers = await getAuthHeaders();
 
@@ -216,7 +217,12 @@ export async function* streamAgentQuery(
       ...headers,
       'Accept': 'text/event-stream',
     },
-    body: JSON.stringify({ content, sessionName, sdkSessionId }),
+    body: JSON.stringify({
+      content,
+      sessionName,
+      sdkSessionId,
+      ...(agentId && { agentId }),
+    }),
   });
 
   if (!res.ok) {

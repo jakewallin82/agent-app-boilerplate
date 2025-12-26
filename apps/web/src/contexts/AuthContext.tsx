@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useRef, type ReactNode 
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { warmupAgent } from '@/lib/api';
+import { config } from '@/config';
 
 // Extended user type with admin status
 interface ExtendedUser extends User {
@@ -32,8 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasWarmedUp.current = true;
 
     // Fire and forget - don't block the UI
-    // TODO: Make this configurable based on user preferences or available agents
-    warmupAgent('sports-nfl').catch(() => {});
+    warmupAgent(config.defaultAgentId).catch(() => {});
   };
 
   useEffect(() => {

@@ -11,6 +11,7 @@ import {
   ensureSessionDir,
   flushSessionFolder,
   getSessionDir,
+  renameSessionDir,
 } from '../services/files.js';
 import { getAgentConfig } from '../services/agentConfig.js';
 import { loadSharedFilesIntoSession, loadAgentConfigIntoSession } from '../services/sharedFiles.js';
@@ -92,11 +93,18 @@ agentRouter.post('/query', async (c) => {
     );
 
     if (warmedSession) {
-      // Use the warmed session
-      console.log(`[AGENT] Using warmed session: ${warmedSession.sessionName}`);
-      sessionName = warmedSession.sessionName;
-      sessionDir = warmedSession.sessionDir;
-      sharedFilesAlreadyLoaded = true;
+      // Use the warmed session - rename directory to user's requested name
+      console.log(`[AGENT] Using warmed session: ${warmedSession.sessionName} -> ${requestedSessionName}`);
+      try {
+        sessionDir = await renameSessionDir(warmedSession.sessionName, requestedSessionName);
+        sharedFilesAlreadyLoaded = true;
+        console.log(`[AGENT] Renamed warmup session to: ${sessionDir}`);
+      } catch (renameError) {
+        // If rename fails (e.g., target exists), fall back to creating new session
+        console.warn(`[AGENT] Failed to rename warmup session, creating new:`, renameError);
+        sessionDir = path.join(DATA_DIR, sessionName);
+        await ensureSessionDir(sessionName);
+      }
     } else {
       // Create new session directory
       sessionDir = path.join(DATA_DIR, sessionName);

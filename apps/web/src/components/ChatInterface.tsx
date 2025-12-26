@@ -5,6 +5,7 @@ import { useSessions } from '@/contexts/SessionContext';
 import { useFiles } from '@/contexts/FileContext';
 import { useDevMode } from '@/contexts/DevModeContext';
 import { streamAgentQuery, getSessionMessages } from '@/lib/api';
+import { config } from '@/config';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { DevModeMessageList } from './DevModeMessageList';
@@ -290,7 +291,8 @@ export function ChatInterface() {
     let accumulatedContent = '';
 
     try {
-      for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId)) {
+      // Pass agentId to match warmup cache lookup
+      for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId, config.defaultAgentId)) {
         // Always collect raw messages (for dev mode display, even if currently in user mode)
         // This ensures toggling modes doesn't lose message history
         {

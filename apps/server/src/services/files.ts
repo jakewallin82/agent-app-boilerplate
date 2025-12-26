@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { readFile, mkdir, writeFile, stat } from 'fs/promises';
+import { readFile, mkdir, writeFile, stat, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -70,6 +70,30 @@ export async function ensureSessionDir(sessionId: string): Promise<string> {
 // Get session directory path
 export function getSessionDir(sessionId: string): string {
   return path.join(DATA_DIR, sessionId);
+}
+
+/**
+ * Rename a session directory (used when consuming warmup session)
+ * @param oldName Current directory name (e.g., warmup-xxx)
+ * @param newName New directory name (e.g., user's requested session name)
+ * @returns The new session directory path
+ */
+export async function renameSessionDir(oldName: string, newName: string): Promise<string> {
+  const oldDir = path.join(DATA_DIR, oldName);
+  const newDir = path.join(DATA_DIR, newName);
+
+  if (!existsSync(oldDir)) {
+    throw new Error(`Session directory does not exist: ${oldDir}`);
+  }
+
+  if (existsSync(newDir)) {
+    throw new Error(`Target session directory already exists: ${newDir}`);
+  }
+
+  console.log(`[FILES] Renaming session directory: ${oldName} -> ${newName}`);
+  await rename(oldDir, newDir);
+
+  return newDir;
 }
 
 // Persist a file to Supabase Storage (user or shared)

@@ -110,10 +110,13 @@ export async function loadSharedFilesIntoSession(
     await mkdir(sharedDir, { recursive: true });
   }
 
-  const sharedStoragePath = `${SHARED_PREFIX}/${agentId}`;
+  // Determine which agent's shared storage to load from
+  // User agents can specify sharedSourceAgent to load from another agent's storage (e.g., sports-admin)
+  const sourceAgentId = config.fileLoading.sharedSourceAgent || agentId;
+  const sharedStoragePath = `${SHARED_PREFIX}/${sourceAgentId}`;
   const allFiles = await listAllFilesRecursively(sharedStoragePath);
 
-  console.log(`[SHARED_FILES] Found ${allFiles.length} shared files for agent ${agentId}`);
+  console.log(`[SHARED_FILES] Found ${allFiles.length} shared files for agent ${agentId} (source: ${sourceAgentId})`);
 
   const includePatterns = config.fileLoading.includePatterns || [];
   const excludePatterns = config.fileLoading.excludePatterns || [];
@@ -127,12 +130,14 @@ export async function loadSharedFilesIntoSession(
   for (const relativePath of allFiles) {
     // Check include patterns
     if (includePatterns.length > 0 && !matchesPatterns(relativePath, includePatterns)) {
+      console.log(`[SHARED_FILES] Skipped (no pattern match): ${relativePath} vs patterns: ${JSON.stringify(includePatterns)}`);
       skipped++;
       continue;
     }
 
     // Check exclude patterns
     if (excludePatterns.length > 0 && matchesPatterns(relativePath, excludePatterns)) {
+      console.log(`[SHARED_FILES] Skipped (exclude match): ${relativePath}`);
       skipped++;
       continue;
     }
@@ -157,7 +162,11 @@ export async function loadSharedFilesIntoSession(
     }
 
     // Write to local filesystem
-    const localPath = path.join(sharedDir, relativePath);
+    // Strip 'shared/' prefix if present to avoid duplication (matching upload logic in files.ts:30-32)
+    const normalizedRelativePath = relativePath.startsWith('shared/')
+      ? relativePath.slice(7)
+      : relativePath;
+    const localPath = path.join(sharedDir, normalizedRelativePath);
     const localDir = path.dirname(localPath);
 
     if (!existsSync(localDir)) {

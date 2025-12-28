@@ -72,6 +72,12 @@ export function ChatInterface() {
   // Session creation form state (shown when no session)
   const [sessionNameInput, setSessionNameInput] = useState('');
   const [initialMessageInput, setInitialMessageInput] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState(config.defaultAgentId);
+
+  // Filter agents based on admin status
+  const availableAgents = useMemo(() => {
+    return config.agents.filter(agent => !agent.isAdmin || isAdmin);
+  }, [isAdmin]);
 
   // Timeline-based state
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
@@ -215,6 +221,9 @@ export function ChatInterface() {
     const message = initialMessageInput.trim();
     if (!name || !message) return;
 
+    // Store selected agent for this session
+    const agentId = selectedAgentId;
+
     // Clear form inputs
     setSessionNameInput('');
     setInitialMessageInput('');
@@ -234,6 +243,7 @@ export function ChatInterface() {
       user_id: user?.id || '',
       title: name,
       session_name: name,
+      agent_id: agentId,
       file_count: 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -242,18 +252,26 @@ export function ChatInterface() {
     // Small delay to ensure React has processed the state update
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    // Send the initial message
-    await sendMessage(message, name, undefined);
+    // Send the initial message with the selected agent
+    await sendMessage(message, name, undefined, agentId);
   };
 
-  const sendMessage = async (content: string, sessionName: string, existingSdkSessionId?: string) => {
+  const sendMessage = async (
+    content: string,
+    sessionName: string,
+    existingSdkSessionId?: string,
+    agentId?: string
+  ) => {
     if (isSendingRef.current || !sessionName) return;
     isSendingRef.current = true;
+
+    // Determine which agent to use: passed agentId > current session's agent > default
+    const effectiveAgentId = agentId || currentSession?.agent_id || config.defaultAgentId;
 
     // Stop any active reconnection - user is sending new message
     stopReconnection();
 
-    console.log('[SEND] Sending message with session:', sessionName, 'sdkSessionId:', existingSdkSessionId || 'new');
+    console.log('[SEND] Sending message with session:', sessionName, 'agent:', effectiveAgentId, 'sdkSessionId:', existingSdkSessionId || 'new');
 
     // Add user message to timeline
     const userMessageId = crypto.randomUUID();
@@ -292,7 +310,7 @@ export function ChatInterface() {
 
     try {
       // Pass agentId to match warmup cache lookup
-      for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId, config.defaultAgentId)) {
+      for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId, effectiveAgentId)) {
         // Always collect raw messages (for dev mode display, even if currently in user mode)
         // This ensures toggling modes doesn't lose message history
         {
@@ -515,10 +533,27 @@ export function ChatInterface() {
       <div className="w-full max-w-xl">
         <h2 className="text-2xl font-semibold text-center mb-2">Start a New Session</h2>
         <p className="text-muted-foreground text-center mb-8">
-          Name your session and describe what you want the agent to do.
+          Choose an agent, name your session, and describe what you want to do.
         </p>
 
         <div className="space-y-6">
+          {/* Agent Selector */}
+          <div>
+            <label className="block text-sm font-medium mb-2">Agent</label>
+            <select
+              value={selectedAgentId}
+              onChange={(e) => setSelectedAgentId(e.target.value)}
+              className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              {availableAgents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name} - {agent.description}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Session Name */}
           <div>
             <label className="block text-sm font-medium mb-2">Session Name</label>
             <input
@@ -527,13 +562,13 @@ export function ChatInterface() {
               onChange={(e) => setSessionNameInput(e.target.value)}
               placeholder="e.g., nba_research, project_alpha"
               className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
-              autoFocus
             />
             <p className="text-xs text-muted-foreground mt-2">
               Letters, numbers, underscores, and hyphens only
             </p>
           </div>
 
+          {/* Initial Message */}
           <div>
             <label className="block text-sm font-medium mb-2">What would you like the agent to do?</label>
             <textarea
@@ -544,7 +579,7 @@ export function ChatInterface() {
                   handleNewSessionSubmit();
                 }
               }}
-              placeholder="e.g., Search for NBA news and write a summary report..."
+              placeholder="e.g., What are the best bets for tonight's games?"
               rows={5}
               className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary resize-none"
             />

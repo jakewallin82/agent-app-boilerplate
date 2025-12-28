@@ -26,6 +26,7 @@ import {
   subscribeToSession,
   isStreamComplete,
 } from '../services/sessionStreams.js';
+import { loadAgentsFromDirectory } from '../services/agentLoader.js';
 import type { SessionState } from '@agent-app/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -193,6 +194,11 @@ ${content}`;
     });
 
     try {
+      // Load subagent definitions from .claude/agents directory
+      const agentsDir = path.join(sessionDir, '.claude', 'agents');
+      const agents = loadAgentsFromDirectory(agentsDir);
+      console.log(`[AGENT] Loaded ${Object.keys(agents).length} subagents from ${agentsDir}`);
+
       const queryIterator = query({
         prompt: promptWithContext,
         options: {
@@ -200,6 +206,7 @@ ${content}`;
           maxTurns: 100,
           settingSources: ['project'],  // Load CLAUDE.md from session directory
           allowedTools,  // Use tools from getAllowedTools (handles network restrictions)
+          agents,  // Pass subagent definitions to SDK
           ...(existingSessionId && { resume: existingSessionId }),
         },
       });

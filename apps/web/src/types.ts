@@ -84,6 +84,7 @@ export interface SessionWithFiles {
   user_id: string;
   title: string;
   session_name: string;
+  agent_id?: string;
   sdk_session_id?: string;
   file_count: number;
   created_at: string;

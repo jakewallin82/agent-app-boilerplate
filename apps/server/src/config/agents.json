@@ -21,21 +21,114 @@
       },
       "canWriteShared": false
     },
+    "sports-nba": {
+      "id": "sports-nba",
+      "name": "NBA Predictions Agent",
+      "description": "Get NBA game predictions and analysis",
+      "configDir": "sports-nba",
+      "storageMode": "session-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "sharedSourceAgent": "sports-admin",
+        "includePatterns": ["nba/**/*.md"],
+        "maxSharedBytes": 104857600
+      },
+      "security": {
+        "network": "none",
+        "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+      },
+      "startup": {
+        "strategy": "pre-warm-on-login",
+        "warmupTTL": 300
+      },
+      "canWriteShared": false
+    },
     "sports-nfl": {
       "id": "sports-nfl",
-      "name": "NFL Sports Prediction Agent",
-      "description": "NFL game predictions and analysis for users",
+      "name": "NFL Predictions Agent",
+      "description": "Get NFL game predictions and analysis",
       "configDir": "sports-nfl",
       "storageMode": "session-persistent",
       "isolation": "shared",
       "fileLoading": {
         "sharedFiles": "copy-on-start",
-        "includePatterns": ["predictions/**", "reflections/**", "research/**"],
+        "sharedSourceAgent": "sports-admin",
+        "includePatterns": ["nfl/**/*.md"],
         "maxSharedBytes": 104857600
       },
       "security": {
         "network": "none",
-        "allowedTools": ["Read", "Write", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+        "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+      },
+      "startup": {
+        "strategy": "pre-warm-on-login",
+        "warmupTTL": 300
+      },
+      "canWriteShared": false
+    },
+    "sports-nhl": {
+      "id": "sports-nhl",
+      "name": "NHL Predictions Agent",
+      "description": "Get NHL game predictions and analysis",
+      "configDir": "sports-nhl",
+      "storageMode": "session-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "sharedSourceAgent": "sports-admin",
+        "includePatterns": ["nhl/**/*.md"],
+        "maxSharedBytes": 104857600
+      },
+      "security": {
+        "network": "none",
+        "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+      },
+      "startup": {
+        "strategy": "pre-warm-on-login",
+        "warmupTTL": 300
+      },
+      "canWriteShared": false
+    },
+    "sports-mlb": {
+      "id": "sports-mlb",
+      "name": "MLB Predictions Agent",
+      "description": "Get MLB game predictions and analysis",
+      "configDir": "sports-mlb",
+      "storageMode": "session-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "sharedSourceAgent": "sports-admin",
+        "includePatterns": ["mlb/**/*.md"],
+        "maxSharedBytes": 104857600
+      },
+      "security": {
+        "network": "none",
+        "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+      },
+      "startup": {
+        "strategy": "pre-warm-on-login",
+        "warmupTTL": 300
+      },
+      "canWriteShared": false
+    },
+    "sports-ncaab": {
+      "id": "sports-ncaab",
+      "name": "NCAAB Predictions Agent",
+      "description": "Get college basketball predictions and analysis",
+      "configDir": "sports-ncaab",
+      "storageMode": "session-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "sharedSourceAgent": "sports-admin",
+        "includePatterns": ["ncaab/**/*.md"],
+        "maxSharedBytes": 104857600
+      },
+      "security": {
+        "network": "none",
+        "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
       },
       "startup": {
         "strategy": "pre-warm-on-login",
@@ -53,6 +146,26 @@
       "fileLoading": {
         "sharedFiles": "copy-on-start",
         "includePatterns": ["predictions/**", "reflections/**", "research/**"]
+      },
+      "security": {
+        "network": "full",
+        "allowedTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task", "TaskOutput", "TodoWrite", "AskUserQuestion", "Skill"]
+      },
+      "startup": {
+        "strategy": "on-demand"
+      },
+      "canWriteShared": true
+    },
+    "sports-admin": {
+      "id": "sports-admin",
+      "name": "Multi-Sport Prediction Admin",
+      "description": "Admin agent for generating predictions across NFL, NBA, NHL, MLB, and NCAAB",
+      "configDir": "sports-admin",
+      "storageMode": "shared-persistent",
+      "isolation": "shared",
+      "fileLoading": {
+        "sharedFiles": "copy-on-start",
+        "includePatterns": ["**/*.md"]
       },
       "security": {
         "network": "full",

@@ -25,7 +25,12 @@ function getStoragePath(
 ): string {
   if (isShared) {
     // Shared files: shared/{agentId}/{relativePath}
-    return path.join(SHARED_PREFIX, agentId, relativePath).replace(/\\/g, '/');
+    // Strip 'shared/' prefix from relativePath if present to avoid duplication
+    // (agent writes to ./shared/nba/... which we store at shared/{agentId}/nba/...)
+    const normalizedPath = relativePath.startsWith('shared/')
+      ? relativePath.slice(7)  // Remove 'shared/' prefix
+      : relativePath;
+    return path.join(SHARED_PREFIX, agentId, normalizedPath).replace(/\\/g, '/');
   }
   // User files: {userId}/{sessionName}/{relativePath}
   return path.join(userId, sessionName, relativePath).replace(/\\/g, '/');

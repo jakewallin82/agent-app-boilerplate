@@ -26,24 +26,24 @@ Implement a complete multi-sport prediction system with:
 ## Desired End State
 
 After implementation:
-1. **Five admin agents** (`sports-nba-admin`, `sports-nfl-admin`, `sports-nhl-admin`, `sports-mlb-admin`, `sports-ncaab-admin`) with:
+1. **One admin agent** (`sports-admin`) with:
    - Full tool access (Bash, WebSearch, WebFetch, etc.)
-   - `canWriteShared: true` - Files persist to Supabase `/shared/{agentId}/`
-   - Complete subagent and skill configurations
+   - `canWriteShared: true` - Files persist to Supabase `/shared/sports-admin/`
+   - Complete multi-sport subagent and skill configurations (NFL, NBA, NHL, MLB, NCAAB)
 
 2. **Five user agents** (`sports-nba`, `sports-nfl`, `sports-nhl`, `sports-mlb`, `sports-ncaab`) with:
    - Read-only tool access (Read, Glob, Grep)
-   - Predictions loaded from baked `/app/shared/{agentId}/` at container startup
-   - Simple CLAUDE.md for presenting insights
+   - Predictions loaded from baked `/app/shared/sports-admin/{sport}/` at container startup
+   - Simple CLAUDE.md for presenting insights to users
 
 3. **Baked image pipeline** via GitHub Actions:
-   - Downloads shared files from Supabase Storage
-   - Bakes into Docker image at `/app/shared/`
-   - Deployed on schedule (daily) or manual trigger
+   - Downloads shared files from Supabase Storage `/shared/sports-admin/`
+   - Bakes into Docker image at `/app/shared/sports-admin/`
+   - Deployed on schedule (daily at 6am UTC) or manual trigger
 
 4. **Verification**:
-   - `docker run` shows `/app/shared/{agentId}/` contains predictions
-   - Admin sessions persist files to Supabase `/shared/{agentId}/`
+   - `docker run` shows `/app/shared/sports-admin/` contains predictions by sport
+   - Admin sessions persist files to Supabase `/shared/sports-admin/{sport}/`
    - User sessions have instant access to predictions (no download wait)
 
 ## What We're NOT Doing
@@ -59,8 +59,9 @@ After implementation:
 The approach is phased:
 1. **Phase 1**: Migrate claude-sports agents to boilerplate as admin agents
 2. **Phase 2**: Create user-facing agent configurations
-3. **Phase 3**: Implement baked image build pipeline
-4. **Phase 4**: Update sharedFiles.ts to use baked files in production
+3. **Phase 3**: Agent selection UI (dropdown in frontend)
+4. **Phase 4**: Implement baked image build pipeline
+5. **Phase 5**: Update sharedFiles.ts to use baked files in production
 
 ---
 
@@ -87,17 +88,17 @@ agent/configs/sports-admin/
 └── requirements.txt    # Python dependencies
 ```
 
-#### 2. Update agents.json with Multi-Sport Admin Agents
+#### 2. Update agents.json with Sports Admin Agent
 
 **File**: `apps/server/src/config/agents.json`
-**Changes**: Add sport-specific admin agents that share the same configDir
+**Changes**: Add single `sports-admin` agent for all sports
 
 ```json
 {
   "sports-admin": {
     "id": "sports-admin",
-    "name": "Multi-Sport Admin Agent",
-    "description": "Admin agent for generating predictions across all sports",
+    "name": "Multi-Sport Prediction Admin",
+    "description": "Admin agent for generating predictions across NFL, NBA, NHL, MLB, and NCAAB",
     "configDir": "sports-admin",
     "storageMode": "shared-persistent",
     "isolation": "shared",
@@ -113,33 +114,16 @@ agent/configs/sports-admin/
       "strategy": "on-demand"
     },
     "canWriteShared": true
-  },
-  "sports-nba-admin": {
-    "id": "sports-nba-admin",
-    "name": "NBA Admin Agent",
-    "description": "Admin agent for NBA predictions",
-    "configDir": "sports-admin",
-    "storageMode": "shared-persistent",
-    "isolation": "shared",
-    "fileLoading": {
-      "sharedFiles": "copy-on-start",
-      "includePatterns": ["nba/**/*.md"],
-      "sharedAgentId": "sports-nba"
-    },
-    "security": {
-      "network": "full",
-      "allowedTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Task", "TaskOutput", "TodoWrite", "AskUserQuestion", "Skill"]
-    },
-    "startup": {
-      "strategy": "on-demand"
-    },
-    "canWriteShared": true,
-    "sharedStorageTarget": "sports-nba"
   }
 }
 ```
 
-Note: `sharedStorageTarget` tells the system to write to `/shared/sports-nba/` (the user agent's shared storage) instead of `/shared/sports-nba-admin/`.
+The admin agent writes to `/shared/sports-admin/` with sport-organized subfolders:
+- `/shared/sports-admin/nba/predictions/`
+- `/shared/sports-admin/nfl/predictions/`
+- etc.
+
+User agents will load from this same location.
 
 #### 3. Update Admin CLAUDE.md Paths
 
@@ -179,15 +163,15 @@ All subagent files in `.claude/agents/{sport}/` need path updates:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] All agent config files exist in `agent/configs/sports-admin/`
-- [ ] `agents.json` parses without errors: `node -e "require('./apps/server/src/config/agents.json')"`
-- [ ] Server starts without errors: `pnpm --filter @agent-app/server dev`
-- [ ] TypeScript compiles: `pnpm --filter @agent-app/server build`
+- [x] All agent config files exist in `agent/configs/sports-admin/`
+- [x] `agents.json` parses without errors: `node -e "require('./apps/server/src/config/agents.json')"`
+- [x] Server starts without errors: `pnpm --filter @agent-app/server dev`
+- [x] TypeScript compiles: `pnpm --filter @agent-app/server build`
 
 #### Manual Verification:
 - [ ] Admin agent can be selected in the UI
 - [ ] Admin agent can run predictions with web search
-- [ ] Files created by admin persist to Supabase `/shared/sports-nba/`
+- [ ] Files created by admin persist to Supabase `/shared/sports-admin/`
 - [ ] Subagents spawn correctly with updated paths
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to Phase 2.
@@ -273,7 +257,7 @@ Ask me about:
 #### 3. Update agents.json with User Agents
 
 **File**: `apps/server/src/config/agents.json`
-**Changes**: Add user agents for each sport
+**Changes**: Add user agents for each sport, all loading from `sports-admin` shared storage
 
 ```json
 {
@@ -286,6 +270,7 @@ Ask me about:
     "isolation": "shared",
     "fileLoading": {
       "sharedFiles": "copy-on-start",
+      "sharedSourceAgent": "sports-admin",
       "includePatterns": ["nba/**/*.md"],
       "maxSharedBytes": 104857600
     },
@@ -299,12 +284,102 @@ Ask me about:
     },
     "canWriteShared": false
   },
-  "sports-nfl": { /* Similar configuration */ },
-  "sports-nhl": { /* Similar configuration */ },
-  "sports-mlb": { /* Similar configuration */ },
-  "sports-ncaab": { /* Similar configuration */ }
+  "sports-nfl": {
+    "id": "sports-nfl",
+    "name": "NFL Predictions Agent",
+    "description": "Get NFL game predictions and analysis",
+    "configDir": "sports-nfl",
+    "storageMode": "session-persistent",
+    "isolation": "shared",
+    "fileLoading": {
+      "sharedFiles": "copy-on-start",
+      "sharedSourceAgent": "sports-admin",
+      "includePatterns": ["nfl/**/*.md"],
+      "maxSharedBytes": 104857600
+    },
+    "security": {
+      "network": "none",
+      "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+    },
+    "startup": {
+      "strategy": "pre-warm-on-login",
+      "warmupTTL": 300
+    },
+    "canWriteShared": false
+  },
+  "sports-nhl": {
+    "id": "sports-nhl",
+    "name": "NHL Predictions Agent",
+    "description": "Get NHL game predictions and analysis",
+    "configDir": "sports-nhl",
+    "storageMode": "session-persistent",
+    "isolation": "shared",
+    "fileLoading": {
+      "sharedFiles": "copy-on-start",
+      "sharedSourceAgent": "sports-admin",
+      "includePatterns": ["nhl/**/*.md"],
+      "maxSharedBytes": 104857600
+    },
+    "security": {
+      "network": "none",
+      "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+    },
+    "startup": {
+      "strategy": "pre-warm-on-login",
+      "warmupTTL": 300
+    },
+    "canWriteShared": false
+  },
+  "sports-mlb": {
+    "id": "sports-mlb",
+    "name": "MLB Predictions Agent",
+    "description": "Get MLB game predictions and analysis",
+    "configDir": "sports-mlb",
+    "storageMode": "session-persistent",
+    "isolation": "shared",
+    "fileLoading": {
+      "sharedFiles": "copy-on-start",
+      "sharedSourceAgent": "sports-admin",
+      "includePatterns": ["mlb/**/*.md"],
+      "maxSharedBytes": 104857600
+    },
+    "security": {
+      "network": "none",
+      "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+    },
+    "startup": {
+      "strategy": "pre-warm-on-login",
+      "warmupTTL": 300
+    },
+    "canWriteShared": false
+  },
+  "sports-ncaab": {
+    "id": "sports-ncaab",
+    "name": "NCAAB Predictions Agent",
+    "description": "Get college basketball predictions and analysis",
+    "configDir": "sports-ncaab",
+    "storageMode": "session-persistent",
+    "isolation": "shared",
+    "fileLoading": {
+      "sharedFiles": "copy-on-start",
+      "sharedSourceAgent": "sports-admin",
+      "includePatterns": ["ncaab/**/*.md"],
+      "maxSharedBytes": 104857600
+    },
+    "security": {
+      "network": "none",
+      "allowedTools": ["Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+    },
+    "startup": {
+      "strategy": "pre-warm-on-login",
+      "warmupTTL": 300
+    },
+    "canWriteShared": false
+  }
 }
 ```
+
+Note: `sharedSourceAgent: "sports-admin"` tells each user agent to load files from the admin's shared storage instead of their own.
 
 #### 4. Create Config Directories for All Sports
 
@@ -317,22 +392,276 @@ Repeat the sports-nba structure for:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] All user agent config directories exist
-- [ ] Each has valid CLAUDE.md
-- [ ] `agents.json` parses correctly with all agents
-- [ ] Server starts: `pnpm --filter @agent-app/server dev`
+- [x] All user agent config directories exist
+- [x] Each has valid CLAUDE.md
+- [x] `agents.json` parses correctly with all agents
+- [x] Server starts: `pnpm --filter @agent-app/server dev`
 
 #### Manual Verification:
-- [ ] User can select sport-specific agent in UI
-- [ ] User agent can read files from `./shared/{sport}/`
-- [ ] User agent cannot use web search (blocked)
+- [ ] User can select sport-specific agent in UI (e.g., "NBA Predictions Agent")
+- [ ] User agent can read files from `./shared/nba/` (loaded from sports-admin storage)
+- [ ] User agent cannot use web search (blocked by security config)
 - [ ] User agent cannot write to shared storage
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to Phase 3.
 
 ---
 
-## Phase 3: Implement Baked Image Build Pipeline
+## Phase 3: Agent Selection UI
+
+### Overview
+Add a dropdown to the session creation form allowing users to select which agent to use. Agent list is embedded in frontend config (no backend endpoint needed).
+
+### Changes Required:
+
+#### 1. Update Frontend Config with Agent List
+
+**File**: `apps/web/src/config.ts`
+**Changes**: Add agents array with display info
+
+```typescript
+/**
+ * Frontend configuration
+ */
+
+export interface AgentOption {
+  id: string;
+  name: string;
+  description: string;
+  isAdmin?: boolean;  // Only show to admin users
+}
+
+export const config = {
+  defaultAgentId: 'sports-nba',
+
+  // Available agents for selection
+  // Must match IDs in apps/server/src/config/agents.json
+  agents: [
+    {
+      id: 'sports-nba',
+      name: 'NBA Predictions',
+      description: 'Get NBA game predictions and analysis',
+    },
+    {
+      id: 'sports-nfl',
+      name: 'NFL Predictions',
+      description: 'Get NFL game predictions and analysis',
+    },
+    {
+      id: 'sports-nhl',
+      name: 'NHL Predictions',
+      description: 'Get NHL game predictions and analysis',
+    },
+    {
+      id: 'sports-mlb',
+      name: 'MLB Predictions',
+      description: 'Get MLB game predictions and analysis',
+    },
+    {
+      id: 'sports-ncaab',
+      name: 'College Basketball',
+      description: 'Get NCAAB game predictions and analysis',
+    },
+    {
+      id: 'sports-admin',
+      name: 'Sports Admin',
+      description: 'Generate predictions (admin only)',
+      isAdmin: true,
+    },
+  ] as AgentOption[],
+} as const;
+```
+
+#### 2. Add Agent Selector to ChatInterface
+
+**File**: `apps/web/src/components/ChatInterface.tsx`
+**Changes**: Add agent selection state and dropdown to session creation form
+
+```typescript
+// Add to component state (around line 73)
+const [selectedAgentId, setSelectedAgentId] = useState(config.defaultAgentId);
+
+// Filter agents based on admin status
+const availableAgents = useMemo(() => {
+  return config.agents.filter(agent => !agent.isAdmin || isAdmin);
+}, [isAdmin]);
+```
+
+Update `renderSessionCreationForm()` to include dropdown:
+
+```tsx
+const renderSessionCreationForm = () => (
+  <div className="flex flex-col items-center justify-center h-full p-8">
+    <div className="w-full max-w-xl">
+      <h2 className="text-2xl font-semibold text-center mb-2">Start a New Session</h2>
+      <p className="text-muted-foreground text-center mb-8">
+        Choose an agent, name your session, and describe what you want to do.
+      </p>
+
+      <div className="space-y-6">
+        {/* Agent Selector */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Agent</label>
+          <select
+            value={selectedAgentId}
+            onChange={(e) => setSelectedAgentId(e.target.value)}
+            className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            {availableAgents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name} - {agent.description}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Session Name */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Session Name</label>
+          <input
+            type="text"
+            value={sessionNameInput}
+            onChange={(e) => setSessionNameInput(e.target.value)}
+            placeholder="e.g., nba_research, project_alpha"
+            className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <p className="text-xs text-muted-foreground mt-2">
+            Letters, numbers, underscores, and hyphens only
+          </p>
+        </div>
+
+        {/* Initial Message */}
+        <div>
+          <label className="block text-sm font-medium mb-2">What would you like the agent to do?</label>
+          <textarea
+            value={initialMessageInput}
+            onChange={(e) => setInitialMessageInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.metaKey) {
+                handleNewSessionSubmit();
+              }
+            }}
+            placeholder="e.g., What are the best bets for tonight's games?"
+            rows={5}
+            className="w-full bg-input border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+          />
+        </div>
+
+        <button
+          onClick={handleNewSessionSubmit}
+          disabled={!sessionNameInput.trim() || !initialMessageInput.trim()}
+          className="w-full px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+        >
+          Start Session
+        </button>
+
+        <p className="text-xs text-muted-foreground text-center">
+          Cmd + Enter to submit
+        </p>
+      </div>
+    </div>
+  </div>
+);
+```
+
+#### 3. Pass Selected Agent to Query
+
+**File**: `apps/web/src/components/ChatInterface.tsx`
+**Changes**: Update `sendMessage` and `handleNewSessionSubmit` to use selected agent
+
+```typescript
+// Update handleNewSessionSubmit to include agentId
+const handleNewSessionSubmit = async () => {
+  const name = sessionNameInput.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const message = initialMessageInput.trim();
+  if (!name || !message) return;
+
+  // Store selected agent for this session
+  const agentId = selectedAgentId;
+
+  // ... rest of existing code ...
+
+  // Pass agentId to sendMessage
+  await sendMessage(message, name, undefined, agentId);
+};
+
+// Update sendMessage signature
+const sendMessage = async (
+  content: string,
+  sessionName: string,
+  existingSdkSessionId?: string,
+  agentId?: string
+) => {
+  const effectiveAgentId = agentId || currentSession?.agent_id || config.defaultAgentId;
+
+  // ... existing code ...
+
+  // Update streamAgentQuery call (around line 295)
+  for await (const message of streamAgentQuery(content, sessionName, existingSdkSessionId, effectiveAgentId)) {
+    // ...
+  }
+};
+```
+
+#### 4. Store Agent ID in Session
+
+The agent ID should be stored with the session so continuing conversations use the same agent. The backend already stores `agent_id` in the sessions table (see `agent.ts:239`).
+
+**File**: `apps/web/src/components/ChatInterface.tsx`
+**Changes**: Include agent_id when creating temporary session
+
+```typescript
+// In handleNewSessionSubmit, update setCurrentSession call
+setCurrentSession({
+  id: 'pending',
+  user_id: user?.id || '',
+  title: name,
+  session_name: name,
+  agent_id: selectedAgentId,  // ADD THIS
+  file_count: 0,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+});
+```
+
+#### 5. Update Session Type (if needed)
+
+**File**: `packages/shared/src/types.ts` or `apps/web/src/types.ts`
+**Changes**: Ensure Session type includes agent_id
+
+```typescript
+export interface Session {
+  id: string;
+  user_id: string;
+  title: string;
+  session_name: string;
+  agent_id?: string;  // Ensure this exists
+  sdk_session_id?: string;
+  file_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### Success Criteria:
+
+#### Automated Verification:
+- [x] TypeScript compiles: `pnpm --filter @agent-app/web build`
+- [x] Config exports agents array correctly
+- [x] No console errors on page load
+
+#### Manual Verification:
+- [ ] Dropdown appears in session creation form
+- [ ] Non-admin users see 5 sports agents (no admin agent)
+- [ ] Admin users see 6 agents (including sports-admin)
+- [ ] Selected agent is used for the session (check server logs for agentId)
+- [ ] Continuing a session uses the same agent (not the dropdown selection)
+
+**Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to Phase 4.
+
+---
+
+## Phase 4: Implement Baked Image Build Pipeline
 
 ### Overview
 Create GitHub Actions workflow that downloads shared files from Supabase and bakes them into the Docker image.
@@ -359,23 +688,25 @@ echo "Downloading shared files from Supabase to $OUTPUT_DIR"
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# List of sports to download
-SPORTS=("sports-nba" "sports-nfl" "sports-nhl" "sports-mlb" "sports-ncaab")
+# Download sports-admin shared files (contains all sports: nba/, nfl/, nhl/, mlb/, ncaab/)
+AGENT_ID="sports-admin"
 
-for sport in "${SPORTS[@]}"; do
-  echo "Downloading $sport..."
+echo "Downloading $AGENT_ID shared files..."
 
-  # Use Supabase CLI to download files
-  # Note: Requires SUPABASE_URL and SUPABASE_SERVICE_KEY env vars
-  npx supabase storage download "$BUCKET_NAME/$SHARED_PREFIX/$sport" \
-    --output "$OUTPUT_DIR/$sport" \
-    --recursive \
-    || echo "Warning: No files for $sport or download failed"
-done
+# Use Supabase CLI to download files
+# Note: Requires SUPABASE_URL and SUPABASE_SERVICE_KEY env vars
+npx supabase storage download "$BUCKET_NAME/$SHARED_PREFIX/$AGENT_ID" \
+  --output "$OUTPUT_DIR/$AGENT_ID" \
+  --recursive \
+  || echo "Warning: No files found or download failed"
 
 # Count files
 FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
 echo "Downloaded $FILE_COUNT total files"
+
+# Show directory structure
+echo "Directory structure:"
+find "$OUTPUT_DIR" -type d | head -20
 ```
 
 #### 2. Update Dockerfile to Accept Shared Files
@@ -530,11 +861,11 @@ jobs:
 - [ ] New Cloud Run revision is active
 - [ ] Container has shared files at `/app/shared/`
 
-**Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to Phase 4.
+**Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation before proceeding to Phase 5.
 
 ---
 
-## Phase 4: Update sharedFiles.ts to Use Baked Files
+## Phase 5: Update sharedFiles.ts to Use Baked Files
 
 ### Overview
 Modify the shared files loading to prefer baked files (production) over Supabase downloads (development).
@@ -585,11 +916,12 @@ export async function loadSharedFilesIntoSession(
   const sessionDir = await ensureSessionDir(sessionName);
   const sharedDir = path.join(sessionDir, 'shared');
 
-  // Determine the storage agent ID (admin agents may write to user agent's storage)
-  const storageAgentId = config.sharedStorageTarget || agentId;
+  // Determine which agent's shared storage to load from
+  // User agents use sharedSourceAgent to load from admin storage
+  const sourceAgentId = config.fileLoading.sharedSourceAgent || agentId;
 
   // Check if we have baked files (production) or need to download (dev)
-  const bakedPath = path.join(BAKED_SHARED_DIR, storageAgentId);
+  const bakedPath = path.join(BAKED_SHARED_DIR, sourceAgentId);
 
   if (existsSync(bakedPath)) {
     // PRODUCTION: Copy from baked location (~10-50ms)
@@ -598,7 +930,7 @@ export async function loadSharedFilesIntoSession(
   } else {
     // DEVELOPMENT: Download from Supabase (existing code)
     console.log('[SHARED_FILES] Downloading from Supabase (dev mode)');
-    return await downloadFromSupabase(sessionName, storageAgentId, config);
+    return await downloadFromSupabase(sessionName, sourceAgentId, config);
   }
 }
 
@@ -687,10 +1019,10 @@ async function downloadFromSupabase(
 }
 ```
 
-#### 2. Add sharedStorageTarget to AgentConfig Type
+#### 2. Add sharedSourceAgent to AgentConfig Type
 
 **File**: `packages/shared/src/types.ts`
-**Changes**: Add new config field
+**Changes**: Add new config field for loading from another agent's shared storage
 
 ```typescript
 export interface AgentConfig {
@@ -705,7 +1037,7 @@ export interface AgentConfig {
     includePatterns?: string[];
     excludePatterns?: string[];
     maxSharedBytes?: number;
-    sharedAgentId?: string;  // For loading from a different agent's shared storage
+    sharedSourceAgent?: string;  // NEW: Load from a different agent's shared storage
   };
   security: {
     network: 'none' | 'full';
@@ -716,16 +1048,10 @@ export interface AgentConfig {
     warmupTTL?: number;
   };
   canWriteShared: boolean;
-  sharedStorageTarget?: string;  // NEW: Write to different agent's shared storage
 }
 ```
 
-#### 3. Update files.ts for Shared Storage Target
-
-**File**: `apps/server/src/services/files.ts`
-**Changes**: Update `flushSessionFolder` to use `sharedStorageTarget`
-
-The flush logic should check `config.sharedStorageTarget` and use that as the storage path instead of the agent's own ID when persisting files.
+This allows user agents like `sports-nba` to specify `sharedSourceAgent: "sports-admin"` to load files from the admin's shared storage.
 
 ### Success Criteria:
 
@@ -784,8 +1110,8 @@ The tradeoff is acceptable because:
 - GitHub Actions workflow can be disabled without affecting existing functionality
 
 ### Deployment Order
-1. Phase 1 + 2: Can deploy without pipeline (uses Supabase download)
-2. Phase 3 + 4: Deploy together to enable baked files
+1. Phase 1 + 2 + 3: Can deploy without baked pipeline (uses Supabase download, agent selector works)
+2. Phase 4 + 5: Deploy together to enable baked files
 
 ## References
 

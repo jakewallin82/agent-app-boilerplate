@@ -36,6 +36,9 @@ export function deriveUserView(rawMessages: unknown[]): UserViewState {
 
     // User message
     if (msg.type === 'user') {
+      // Skip synthetic messages (e.g., skill documentation injected by SDK)
+      if ((msg as { isSynthetic?: boolean }).isSynthetic) continue;
+
       const id = msg.uuid || crypto.randomUUID();
 
       // Extract text from user message

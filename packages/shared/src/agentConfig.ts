@@ -42,6 +42,9 @@ export interface FileLoadingConfig {
   /** How to load shared files */
   sharedFiles: SharedFileLoadingMode;
 
+  /** Agent ID to load shared files from (defaults to self) */
+  sharedSourceAgent?: string;
+
   /** Patterns to include when loading shared files (glob patterns) */
   includePatterns?: string[];
 

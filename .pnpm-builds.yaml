@@ -1,0 +1,4 @@
+esbuild@*:
+  flags: [--silent]
+  missingScriptAllowed: true
+  dependencies: false
